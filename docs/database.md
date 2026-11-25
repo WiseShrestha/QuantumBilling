@@ -329,7 +329,8 @@ A saved invoice contains both relationships and snapshots. Editing a customer's 
 | `tax_regime` | `varchar(255)` | Required; `gst`. Snapshot of the business regime when the invoice was raised |
 | `tax_breakdown` | `jsonb` | Required; `[]`. VAT only: one `{name, category, rate_bp, taxable, tax}` row per rate group, amounts in minor units |
 | `company_tax_number`, `client_tax_number` | `varchar(255)` | Nullable; VAT numbers, snapshotted |
-| `reverse_charge` | `boolean` | Required; `false`. VAT only: every line is charged at 0% and the customer accounts for the VAT |
+| `reverse_charge` | `boolean` | Required; `false`. The recipient pays the tax, so none is charged. VAT: every line is charged at 0%. GST: the GST goes to the `rc_*` columns and the client must have a GSTIN |
+| `rc_cgst_amount`, `rc_sgst_amount`, `rc_igst_amount`, `rc_cess_amount` | `bigint` minor units | Required; `0`. GST reverse charge only: the tax the recipient pays. `cgst_amount`…`cess_amount` are then 0 and `grand_total` is `taxable_value` + `round_off`. Added by tenant migration `20261125173748_add_gst_reverse_charge_tax`; existing rows got 0 |
 | `prices_include_tax`, `round_to_whole_units` | `boolean` | Required; `false` and `true`. Snapshots of the business settings |
 | `custom_fields` | `jsonb` | Required; `{}`; see [`field_definitions`](#field_definitions) |
 | `status` | `varchar(255)` | Required; `Draft` |
@@ -409,6 +410,7 @@ Estimates sent before invoicing. A quotation carries the same client and company
 | `total_items` | `integer` | Required; `0` |
 | `total_quantity` | `numeric(15,3)` | Required; `0` |
 | `taxable_value`, `cgst_amount`, `sgst_amount`, `igst_amount`, `cess_amount`, `vat_amount`, `round_off`, `grand_total` | `bigint` minor units | Required; `0` |
+| `rc_cgst_amount`, `rc_sgst_amount`, `rc_igst_amount`, `rc_cess_amount` | `bigint` minor units | Required; `0`. As on `invoices`, and carried to the invoice on conversion |
 | `tax_breakdown` | `jsonb` | Required; `[]`. As on `invoices` |
 | `remarks`, `terms` | `text` | Nullable |
 | `template_id` | `bigint` FK → same-schema `invoice_templates.id` | Nullable; delete sets `NULL` |
@@ -443,6 +445,7 @@ The same columns as [`invoice_items`](#invoice_items), with `quotation_id` (`big
 | `client_id` | `bigint` FK → same-schema `clients.id` | Required; delete restricts |
 | `reason` | `varchar(255)` | Nullable |
 | `subtotal`, `tax_total`, `grand_total` | `bigint` minor units | Nullable in SQL; `0` |
+| `rc_tax_amount` | `bigint` minor units | Required; `0`. On a note against a GST reverse-charge invoice: its share of the recipient's tax, by taxable value. `tax_total` must then be 0 |
 | `status` | `varchar(255)` | Nullable in SQL; `Issued` |
 | `tax_regime` | `varchar(255)` | Required; `gst`. Taken from the original invoice |
 | `tax_breakdown` | `jsonb` | Required; `[]`. VAT only, as on `invoices` |
@@ -898,7 +901,7 @@ Sources: [schema-transfer migration](../priv/repo/migrations/20261015115410_move
 
 ## 9. Backup boundaries
 
-The application's JSON export is a business-data export, not a full PostgreSQL backup. Format version `3.3` stores money in minor units and can upgrade the supported older `2.0`, `2.1`, `3.0`, `3.1` and `3.2` files on restore; a file older than `3.3` has no quotations and restores with none. Files older than `3.2` were written before VAT, so restore treats every record in them as GST: `tax_regime` `gst`, `vat_amount` 0, an empty `tax_breakdown`, no reverse charge, rounding on, and client `country` `IN`. Files without custom fields restore with `custom_fields` `{}`.
+The application's JSON export is a business-data export, not a full PostgreSQL backup. Format version `3.3` stores money in minor units and can upgrade the supported older `2.0`, `2.1`, `3.0`, `3.1` and `3.2` files on restore; a file older than `3.3` has no quotations and restores with none. Files older than `3.2` were written before VAT, so restore treats every record in them as GST: `tax_regime` `gst`, `vat_amount` 0, an empty `tax_breakdown`, no reverse charge, rounding on, and client `country` `IN`. Files without custom fields restore with `custom_fields` `{}`. Files written before GST reverse charge restore with the `rc_*` columns at 0.
 
 The export includes selected organization settings (with the tax regime, VAT number and country, inclusive pricing and rounding) plus, in restore order, field definitions, tax rates, clients, templates, design-asset records, quotations (without `user_id`, which points at `public.users`; with `public_token` and `deleted_at`, so links and Bin state survive), quotation items, invoices (with `quotation_id`), invoice items, e-way bills, Part-B updates, recurring profiles, credit notes, compliance tasks, compliance filings (without `user_id`, as tasks leave out their author), and audit logs. A file written before filings existed restores with none. Every record type that has `custom_fields` exports it. Restore drops a field definition whose object, key or type is not valid. It retains deleted/archived markers. It omits protected credentials, calendar connections and their event links, users, sessions, TOTP enrolments, memberships, business definitions, installation settings, Oban jobs/peers, notifications, email delivery history, and incoming webhook events. Uploaded logo and design-image bytes are not embedded; a path reference alone is not an asset backup. Restore drops `design_assets` rows whose path or kind is malformed. A restored row makes that business the owner of the path, which is the same trust a restore already gives `doc_logo_path`; paths are unguessable content hashes, so only someone who already has the file name can claim it this way.
 

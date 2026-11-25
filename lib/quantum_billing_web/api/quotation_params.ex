@@ -11,7 +11,8 @@ defmodule QuantumBillingWeb.API.QuotationParams do
 
   alias QuantumBillingWeb.API.InvoiceParams
 
-  @top ~w(client_id quotation_date valid_until place_of_supply remarks terms items custom_fields)
+  @top ~w(client_id quotation_date valid_until place_of_supply remarks terms items custom_fields
+          reverse_charge)
 
   @doc """
   `{:ok, client_id, attrs}` for `Quotations.create_quotation/2`, or

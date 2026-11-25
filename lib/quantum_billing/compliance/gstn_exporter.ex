@@ -326,7 +326,14 @@ defmodule QuantumBilling.Compliance.GSTNExporter do
     base = lines(invoice)
     whole = sum_amounts(base)
     whole_tax = whole.cgst + whole.sgst + whole.igst
-    {taxable, tax} = note_amounts(note, whole.taxable, whole_tax)
+
+    {taxable, tax} =
+      if Invoice.gst_reverse_charge?(invoice),
+        # The note charges no tax either; what it takes back from the
+        # recipient's reverse-charge tax is its rc_tax_amount.
+        do: {note.subtotal || note.grand_total || 0, note.rc_tax_amount || 0},
+        else: note_amounts(note, whole.taxable, whole_tax)
+
     {cgst, sgst, igst} = split_tax(tax, Invoice.intra_state?(invoice))
 
     base
@@ -547,9 +554,9 @@ defmodule QuantumBilling.Compliance.GSTNExporter do
   # An invoice without line items: one line from its stored totals.
   defp lines(%Invoice{} = invoice) do
     taxable = invoice.taxable_value || 0
-    cgst = invoice.cgst_amount || 0
-    sgst = invoice.sgst_amount || 0
-    igst = invoice.igst_amount || 0
+    cgst = head(invoice, :cgst)
+    sgst = head(invoice, :sgst)
+    igst = head(invoice, :igst)
     tax = cgst + sgst + igst
 
     [
@@ -572,7 +579,7 @@ defmodule QuantumBilling.Compliance.GSTNExporter do
   # the heads match the invoice. A bigger gap is not rounding and is left alone.
   defp settle_to_invoice(lines, invoice) do
     Enum.reduce(
-      [cgst: invoice.cgst_amount, sgst: invoice.sgst_amount, igst: invoice.igst_amount],
+      [cgst: head(invoice, :cgst), sgst: head(invoice, :sgst), igst: head(invoice, :igst)],
       lines,
       fn {key, stored}, lines ->
         diff = (stored || 0) - Enum.sum(Enum.map(lines, &Map.fetch!(&1, key)))
@@ -628,6 +635,11 @@ defmodule QuantumBilling.Compliance.GSTNExporter do
     diff = total - Enum.sum(Enum.map(lines, &Map.fetch!(&1, key)))
     [Map.update!(first, key, &(&1 + diff)) | rest]
   end
+
+  # A head's tax as GSTR-1 reports it: what the invoice charged, or on a
+  # reverse-charge invoice the tax the recipient pays (rchrg "Y").
+  defp head(%Invoice{} = invoice, head),
+    do: QuantumBilling.EInvoice.Payload.reported_tax(invoice, head)
 
   defp split_tax(tax, true) do
     half = div(tax, 2)

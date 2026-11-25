@@ -142,7 +142,13 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
           field={@form[:client_gstin]}
           label="GSTIN"
           placeholder="27AABCA1234A1Z5"
-          hint={if(@form[:client_gstin].value in [nil, ""], do: @gstin_hint)}
+          hint={
+            cond do
+              @form[:client_gstin].value not in [nil, ""] -> nil
+              @form[:reverse_charge].value in [true, "true"] -> "Required for reverse charge."
+              true -> @gstin_hint
+            end
+          }
         />
         <.field
           :if={@vat?}
@@ -482,6 +488,19 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
           else: "Different state from your business — IGST applies."}
       </p>
 
+      <p
+        :if={!@vat? and @summary.reverse_charge}
+        id={"#{@prefix}-summary-reverse-charge"}
+        class="mt-2 text-2xs text-base-content/60"
+      >
+        Reverse charge: the buyer pays {money(
+          Tax.reverse_charge_tax(@summary),
+          @currency,
+          decimals: 2,
+          space: true
+        )} of GST to the government. It is printed on the {@prefix} but not charged.
+      </p>
+
       <p :if={@vat?} id={"#{@prefix}-summary-vat-note"} class="mt-3 text-2xs text-base-content/45">
         {vat_note(@summary)}
       </p>
@@ -579,6 +598,10 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
     amount = InvoiceItem.amount(item)
 
     cond do
+      # The buyer pays the GST, so none is added to the line.
+      summary.tax_regime != "vat" and summary.reverse_charge ->
+        %{tax: 0, total: amount}
+
       summary.tax_regime != "vat" ->
         tax = InvoiceItem.tax(item)
         %{tax: tax, total: amount + tax}

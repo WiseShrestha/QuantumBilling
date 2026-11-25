@@ -95,6 +95,13 @@ defmodule QuantumBilling.Invoices.Invoice do
     field :company_tax_number, :string
     field :client_tax_number, :string
     field :reverse_charge, :boolean, default: false
+    # GST reverse charge: the tax the recipient pays. The invoice charges none,
+    # so the columns above are 0; these keep it for the document, GSTR-1 and
+    # the e-invoice. 0 on every other invoice.
+    field :rc_cgst_amount, :integer, default: 0
+    field :rc_sgst_amount, :integer, default: 0
+    field :rc_igst_amount, :integer, default: 0
+    field :rc_cess_amount, :integer, default: 0
     field :prices_include_tax, :boolean, default: false
     field :round_to_whole_units, :boolean, default: true
 
@@ -179,6 +186,7 @@ defmodule QuantumBilling.Invoices.Invoice do
     |> validate_inclusion(:status, @statuses)
     |> validate_place_of_supply()
     |> validate_client_tax_number()
+    |> validate_reverse_charge_buyer()
     |> validate_inclusion(:currency, QuantumBilling.Currency.codes(),
       message: "is not a supported currency"
     )
@@ -362,7 +370,32 @@ defmodule QuantumBilling.Invoices.Invoice do
     |> put_change(:tax_breakdown, totals.tax_breakdown)
     |> put_change(:round_off, totals.round_off)
     |> put_change(:grand_total, totals.grand_total)
+    |> put_change(:rc_cgst_amount, totals.rc_cgst_amount)
+    |> put_change(:rc_sgst_amount, totals.rc_sgst_amount)
+    |> put_change(:rc_igst_amount, totals.rc_igst_amount)
+    |> put_change(:rc_cess_amount, totals.rc_cess_amount)
   end
+
+  @doc """
+  Under GST, reverse charge needs a registered recipient: the tax moves to a
+  buyer who pays it under their own GSTIN. Shared with quotations.
+  """
+  def validate_reverse_charge_buyer(changeset) do
+    if get_field(changeset, :reverse_charge) == true and
+         (get_field(changeset, :tax_regime) || "gst") == "gst" do
+      validate_required(changeset, [:client_gstin],
+        message: "is required for a reverse-charge invoice: the buyer pays the tax"
+      )
+    else
+      changeset
+    end
+  end
+
+  @doc "True when the recipient pays this GST invoice's tax (reverse charge)."
+  def gst_reverse_charge?(%{reverse_charge: true} = document),
+    do: Map.get(document, :tax_regime, "gst") in ["gst", nil]
+
+  def gst_reverse_charge?(_document), do: false
 
   @doc "What `QuantumBilling.Tax.totals/2` needs to know about the invoice."
   def tax_context(%Ecto.Changeset{} = changeset) do

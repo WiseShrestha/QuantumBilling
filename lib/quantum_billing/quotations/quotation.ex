@@ -67,6 +67,11 @@ defmodule QuantumBilling.Quotations.Quotation do
     field :sgst_amount, :integer, default: 0
     field :igst_amount, :integer, default: 0
     field :cess_amount, :integer, default: 0
+    # GST reverse charge, as on an invoice (see `Invoice`).
+    field :rc_cgst_amount, :integer, default: 0
+    field :rc_sgst_amount, :integer, default: 0
+    field :rc_igst_amount, :integer, default: 0
+    field :rc_cess_amount, :integer, default: 0
     field :vat_amount, :integer, default: 0
     field :tax_breakdown, {:array, :map}, default: []
     field :round_off, :integer, default: 0
@@ -124,6 +129,7 @@ defmodule QuantumBilling.Quotations.Quotation do
     |> validate_length(:client_name, max: 255)
     |> Invoice.validate_place_of_supply()
     |> Invoice.validate_client_tax_number()
+    |> Invoice.validate_reverse_charge_buyer()
     |> validate_inclusion(:currency, QuantumBilling.Currency.codes(),
       message: "is not a supported currency"
     )

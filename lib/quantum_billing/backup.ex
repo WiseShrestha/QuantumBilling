@@ -94,7 +94,8 @@ defmodule QuantumBilling.Backup do
                      razorpay_payment_url razorpay_payment_id public_token template_id
                      layout_xml deleted_at custom_fields tax_regime vat_amount tax_breakdown
                      company_tax_number client_tax_number reverse_charge prices_include_tax
-                     round_to_whole_units quotation_id)a
+                     round_to_whole_units quotation_id
+                     rc_cgst_amount rc_sgst_amount rc_igst_amount rc_cess_amount)a
 
   # deleted_at and public_token travel too: binned quotations stay in the Bin,
   # and a client's emailed link keeps working after a restore.
@@ -106,7 +107,8 @@ defmodule QuantumBilling.Backup do
                        round_to_whole_units total_items total_quantity taxable_value
                        cgst_amount sgst_amount igst_amount cess_amount vat_amount tax_breakdown
                        round_off grand_total remarks terms template_id layout_xml
-                       custom_fields public_token deleted_at inserted_at)a
+                       custom_fields public_token deleted_at inserted_at
+                       rc_cgst_amount rc_sgst_amount rc_igst_amount rc_cess_amount)a
 
   @quotation_item_fields ~w(id quotation_id description hsn_sac quantity unit rate tax_rate
                             amount position custom_fields tax_rate_id tax_rate_bp tax_category
@@ -127,8 +129,11 @@ defmodule QuantumBilling.Backup do
   @profile_fields ~w(id title frequency next_run_date status auto_send_email client_id
                      items_json deleted_at custom_fields)a
 
+  @reverse_charge_fields ~w(rc_cgst_amount rc_sgst_amount rc_igst_amount rc_cess_amount
+                            rc_tax_amount)a
+
   @credit_note_fields ~w(id note_number note_type invoice_id client_id reason subtotal tax_total
-                         grand_total status custom_fields tax_regime tax_breakdown note_date)a
+                         grand_total status custom_fields tax_regime tax_breakdown note_date rc_tax_amount)a
 
   @tax_rate_fields ~w(id name category rate_bp exemption_reason is_default position archived_at
                       inserted_at)a
@@ -527,6 +532,8 @@ defmodule QuantumBilling.Backup do
       for field <- fields, into: %{} do
         value = Map.get(row, Atom.to_string(field), Map.get(row, field))
         value = if field == :custom_fields and is_nil(value), do: %{}, else: value
+        # Files from before GST reverse charge have none of its tax: 0.
+        value = if field in @reverse_charge_fields and is_nil(value), do: 0, else: value
 
         case Ecto.Type.cast(stored_type(schema, field), value) do
           {:ok, cast} -> {field, cast}

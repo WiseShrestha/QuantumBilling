@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "QuantumBilling API",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Server-to-server API for one business's books. See docs/api.md for authentication, errors, idempotency and paging, and docs/webhooks.md for events. Every amount is an integer in the currency's minor unit (paise for INR, fils for AED and KWD, baisa for OMR, pence for GBP, cents for EUR). `currency_exponent` on an invoice, quotation or note gives the decimal places: 2 (100 = one unit), or 3 for KWD, BHD and OMR (1000 = one unit). Amounts sent in a request use the same units as the document they belong to; for a new invoice or quotation that is the business currency."
   },
   "servers": [
@@ -157,7 +157,7 @@
           },
           "reverse_charge": {
             "type": "boolean",
-            "description": "VAT only: the customer accounts for the VAT, so none is charged"
+            "description": "VAT: the customer accounts for the VAT, so none is charged. GST: reverse charge (CGST Act s. 9(3), IGST Act s. 5(3)); the recipient pays the tax, so cgst, sgst, igst and cess are 0 and grand_total is the taxable value plus round-off. The tax the recipient pays is in amounts.rc_*"
           },
           "tax_breakdown": {
             "type": "array",
@@ -247,6 +247,22 @@
               "vat": {
                 "type": "integer",
                 "description": "vat (minor units; 0 on GST invoices)"
+              },
+              "rc_cgst": {
+                "type": "integer",
+                "description": "GST reverse charge: the CGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_sgst": {
+                "type": "integer",
+                "description": "GST reverse charge: the SGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_igst": {
+                "type": "integer",
+                "description": "GST reverse charge: the IGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_cess": {
+                "type": "integer",
+                "description": "GST reverse charge: the cess the recipient pays, not included in grand_total (minor units; 0 otherwise)"
               },
               "round_off": {
                 "type": "integer",
@@ -715,7 +731,7 @@
           },
           "reverse_charge": {
             "type": "boolean",
-            "description": "VAT only"
+            "description": "VAT: the customer accounts for the VAT. GST: reverse charge; the recipient pays the tax, which is recorded but not charged. A GST reverse-charge document needs a client with a GSTIN"
           },
           "items": {
             "type": "array",
@@ -1033,7 +1049,7 @@
           },
           "reverse_charge": {
             "type": "boolean",
-            "description": "VAT only: the customer accounts for the VAT, so none is charged"
+            "description": "VAT: the customer accounts for the VAT, so none is charged. GST: reverse charge (CGST Act s. 9(3), IGST Act s. 5(3)); the recipient pays the tax, so cgst, sgst, igst and cess are 0 and grand_total is the taxable value plus round-off. The tax the recipient pays is in amounts.rc_*"
           },
           "tax_breakdown": {
             "type": "array",
@@ -1123,6 +1139,22 @@
               "vat": {
                 "type": "integer",
                 "description": "vat (minor units; 0 on GST quotations)"
+              },
+              "rc_cgst": {
+                "type": "integer",
+                "description": "GST reverse charge: the CGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_sgst": {
+                "type": "integer",
+                "description": "GST reverse charge: the SGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_igst": {
+                "type": "integer",
+                "description": "GST reverse charge: the IGST the recipient pays, not included in grand_total (minor units; 0 otherwise)"
+              },
+              "rc_cess": {
+                "type": "integer",
+                "description": "GST reverse charge: the cess the recipient pays, not included in grand_total (minor units; 0 otherwise)"
               },
               "round_off": {
                 "type": "integer",
@@ -1257,7 +1289,7 @@
           },
           "reverse_charge": {
             "type": "boolean",
-            "description": "VAT only"
+            "description": "VAT: the customer accounts for the VAT. GST: reverse charge; the recipient pays the tax, which is recorded but not charged. A GST reverse-charge document needs a client with a GSTIN"
           },
           "items": {
             "type": "array",

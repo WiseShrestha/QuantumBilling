@@ -56,7 +56,8 @@ defmodule QuantumBilling.EInvoice.Payload do
      [
        element("TaxSch", "GST"),
        element("SupTyp", supply_type(invoice)),
-       element("RegRev", "N")
+       # Reverse charge (CGST Act s. 9(3), IGST Act s. 5(3)): the recipient pays the tax.
+       element("RegRev", if(Invoice.gst_reverse_charge?(invoice), do: "Y", else: "N"))
      ]}
   end
 
@@ -113,12 +114,16 @@ defmodule QuantumBilling.EInvoice.Payload do
     items =
       invoice.items
       |> Enum.with_index(1)
-      |> Enum.map(fn {item, index} -> item(item, index, intra_state?) end)
+      |> Enum.map(fn {item, index} ->
+        item(item, index, intra_state?, Invoice.gst_reverse_charge?(invoice))
+      end)
 
     {"ItemList", [], items}
   end
 
-  defp item(%InvoiceItem{} = item, index, intra_state?) do
+  # With RegRev "Y" the IRP lets the item value leave out the tax, which the
+  # recipient pays; the tax amounts are still reported.
+  defp item(%InvoiceItem{} = item, index, intra_state?, reverse_charge?) do
     amount = InvoiceItem.amount(item)
     tax = InvoiceItem.tax(item)
     {cgst, sgst, igst} = split(tax, intra_state?)
@@ -139,7 +144,7 @@ defmodule QuantumBilling.EInvoice.Payload do
        element("CgstAmt", decimal(cgst)),
        element("SgstAmt", decimal(sgst)),
        element("IgstAmt", decimal(igst)),
-       element("TotItemVal", decimal(amount + tax))
+       element("TotItemVal", decimal(if(reverse_charge?, do: amount, else: amount + tax)))
      ]}
   end
 
@@ -147,14 +152,31 @@ defmodule QuantumBilling.EInvoice.Payload do
     {"ValDtls", [],
      [
        element("AssVal", decimal(invoice.taxable_value)),
-       element("CgstVal", decimal(invoice.cgst_amount)),
-       element("SgstVal", decimal(invoice.sgst_amount)),
-       element("IgstVal", decimal(invoice.igst_amount)),
-       element("CesVal", decimal(invoice.cess_amount)),
+       element("CgstVal", decimal(reported_tax(invoice, :cgst))),
+       element("SgstVal", decimal(reported_tax(invoice, :sgst))),
+       element("IgstVal", decimal(reported_tax(invoice, :igst))),
+       element("CesVal", decimal(reported_tax(invoice, :cess))),
        element("RndOffAmt", decimal(invoice.round_off)),
        element("TotInvVal", decimal(invoice.grand_total))
      ]}
   end
+
+  @doc """
+  The tax an e-invoice reports for a head (`:cgst`, `:sgst`, `:igst`,
+  `:cess`): what was charged, or on a reverse-charge invoice what the
+  recipient pays. `TotInvVal` stays the invoice total, which leaves it out.
+  """
+  def reported_tax(%Invoice{} = invoice, :cgst),
+    do: (invoice.cgst_amount || 0) + (invoice.rc_cgst_amount || 0)
+
+  def reported_tax(%Invoice{} = invoice, :sgst),
+    do: (invoice.sgst_amount || 0) + (invoice.rc_sgst_amount || 0)
+
+  def reported_tax(%Invoice{} = invoice, :igst),
+    do: (invoice.igst_amount || 0) + (invoice.rc_igst_amount || 0)
+
+  def reported_tax(%Invoice{} = invoice, :cess),
+    do: (invoice.cess_amount || 0) + (invoice.rc_cess_amount || 0)
 
   defp split(tax, true), do: {div(tax, 2), tax - div(tax, 2), 0}
   defp split(tax, false), do: {0, 0, tax}

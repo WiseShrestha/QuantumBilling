@@ -11,6 +11,7 @@ defmodule QuantumBilling.CreditNotes do
   alias QuantumBilling.Repo
   alias QuantumBilling.Settings
   alias QuantumBilling.Settings.Organization
+  alias QuantumBilling.Tax
 
   # Notes on binned invoices are left out; a left join keeps notes with no invoice.
   def list_credit_notes do
@@ -115,6 +116,7 @@ defmodule QuantumBilling.CreditNotes do
       |> CreditNote.changeset(note_params(current, attrs, note_type, creditable), trusted)
       |> refuse_closed_invoice(locked)
       |> put_breakdown(current)
+      |> put_reverse_charge(current)
     end)
     |> Multi.run(:advance_number, fn repo, %{organization: organization, note: note} ->
       field = next_number_field(note.note_type)
@@ -299,6 +301,26 @@ defmodule QuantumBilling.CreditNotes do
 
   defp next_number_field("Debit"), do: :debit_note_next_number
   defp next_number_field(_credit), do: :credit_note_next_number
+
+  # A note on a GST reverse-charge invoice follows the invoice: it charges no
+  # tax, and records its share of the recipient's tax by its taxable value.
+  defp put_reverse_charge(changeset, %Invoice{} = invoice) do
+    if Invoice.gst_reverse_charge?(invoice) do
+      taxable = Ecto.Changeset.get_field(changeset, :subtotal) || 0
+
+      changeset
+      |> Ecto.Changeset.validate_number(:tax_total,
+        equal_to: 0,
+        message: "must be 0: the invoice is reverse charge, so the buyer pays the tax"
+      )
+      |> Ecto.Changeset.put_change(
+        :rc_tax_amount,
+        scale(Tax.reverse_charge_tax(invoice), taxable, invoice.taxable_value)
+      )
+    else
+      changeset
+    end
+  end
 
   defp invoice_tax(invoice) do
     (invoice.cgst_amount || 0) + (invoice.sgst_amount || 0) + (invoice.igst_amount || 0) +

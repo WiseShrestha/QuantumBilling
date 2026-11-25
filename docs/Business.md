@@ -162,7 +162,7 @@ Each item contains a description, optional HSN/SAC code, quantity, unit, rate, G
 
 At least one item, the invoice date, the place of supply, and the client name are required. A due date cannot precede the invoice date. Payment term presets include Due on Receipt and Net 7/15/30/45/60 Days, with a Custom option.
 
-On a VAT invoice each line picks one of the business's active VAT rates instead of a GST percentage, and a new line starts on the default rate. There is no place of supply, and a Reverse charge switch marks the whole invoice as reverse-charged. HSN/SAC stays optional. The line keeps a copy of its rate's name, category and percentage, so editing or archiving the rate later does not change the invoice.
+On a VAT invoice each line picks one of the business's active VAT rates instead of a GST percentage, and a new line starts on the default rate. There is no place of supply. Under either regime a Reverse charge switch marks the whole invoice as reverse-charged (see [Reverse charge under GST](#reverse-charge-under-gst)). HSN/SAC stays optional. The line keeps a copy of its rate's name, category and percentage, so editing or archiving the rate later does not change the invoice.
 
 ### Numbering and snapshots
 
@@ -186,6 +186,22 @@ Money is held as integer minor units of the invoice currency (paise for INR, fil
 6. Round the payable total to the nearest whole rupee, half-up, and store the difference in `round_off`.
 
 For example, 2.5 units at ₹99.99 produce ₹249.98 before tax. At 18%, GST is ₹45.00. For a matching company state and place of supply, this becomes ₹22.50 CGST and ₹22.50 SGST. The pre-rounding amount is ₹294.98; `round_off` is ₹0.02 and the payable grand total is ₹295.00.
+
+### Reverse charge under GST
+
+Some supplies are taxed on the recipient rather than the supplier: the services notified under section 9(3) of the CGST Act (and section 5(3) of the IGST Act), such as legal services from an advocate, goods transport by a GTA, or sponsorship. The supplier issues the invoice, but the recipient pays the GST to the government. (Section 9(4), purchases from an unregistered supplier, is the recipient's self-invoice and is not something this app issues.)
+
+The Reverse charge switch on the invoice and quotation forms, and `reverse_charge` in the API, mark such a document. It follows the same design as a VAT reverse-charge invoice:
+
+1. The GST is worked out per line as usual, then moved out of what is charged: CGST, SGST, IGST and cess are 0 on the invoice, and the grand total is the taxable value plus the round-off to the rupee.
+2. The tax the recipient pays is kept in its own columns (`rc_cgst_amount`, `rc_sgst_amount`, `rc_igst_amount`, `rc_cess_amount`).
+3. The client must have a GSTIN: the tax moves to a registered buyer.
+4. The document, its PDF and the public page print the Rule 46(p) declaration "Tax payable on reverse charge basis: Yes" under the totals, with each head's rate and amount, for example "IGST @ 18% (payable by recipient) ₹18,000.00".
+5. Payment links and the UPI QR ask for the grand total, so the buyer is never charged the tax. Reports, the dashboard's tax figure and receivables count only the tax charged, so a reverse-charge invoice adds its taxable value and no output tax.
+6. GSTR-1 reports the invoice in B2B with `rchrg` "Y", its taxable value, the recipient's tax per rate and its invoice value (the grand total). The e-invoice sends `RegRev` "Y", reports the tax in the item and value details, and leaves it out of the item and invoice values, which the IRP allows on a reverse-charge invoice.
+7. A credit or debit note on such an invoice charges no tax either; it records its share of the recipient's tax (`rc_tax_amount`), worked out from its taxable value, and GSTR-1 reports that share with `rchrg` "Y".
+
+Until this was added, the switch was VAT-only and the API refused `reverse_charge` for GST; a crafted form submit could still set it, and GSTR-1 then flagged a tax-charged invoice as reverse charge. The flag now means the same thing in the totals, the document and every export.
 
 A VAT invoice is calculated differently:
 

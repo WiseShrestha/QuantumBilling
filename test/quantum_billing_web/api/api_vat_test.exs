@@ -192,6 +192,8 @@ defmodule QuantumBillingWeb.API.VATTest do
     }
 
     assert %{"error" => %{"fields" => fields}} = owner |> create(body) |> json_response(422)
-    assert ["is for VAT invoices; this business charges GST"] = fields["reverse_charge"]
+    assert ["is for VAT invoices; this business charges GST"] = fields["items.0.tax_rate_id"]
+    # Reverse charge is a GST feature too (issue #79), so it is not refused.
+    refute Map.has_key?(fields, "reverse_charge")
   end
 end

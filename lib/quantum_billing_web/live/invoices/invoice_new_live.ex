@@ -405,11 +405,17 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
               /> <.field field={f[:due_date]} label="Due Date" type="date" />
             </div>
 
-            <div :if={@vat?} id="invoice-reverse-charge" class="mt-3">
+            <div id="invoice-reverse-charge" class="mt-3">
               <.toggle
                 field={f[:reverse_charge]}
                 label="Reverse charge"
-                hint="The customer accounts for the VAT, so none is charged on this invoice."
+                hint={
+                  if @vat?,
+                    do: "The customer accounts for the VAT, so none is charged on this invoice.",
+                    else:
+                      "The buyer pays the GST to the government (Section 9(3) / IGST 5(3)). " <>
+                        "The tax is printed but not charged. Needs the buyer's GSTIN."
+                }
               />
             </div>
 

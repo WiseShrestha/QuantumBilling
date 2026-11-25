@@ -61,19 +61,56 @@ defmodule QuantumBilling.Tax do
      ]}
   ]
 
+  # The reverse-charge tax a GST invoice records but does not charge.
+  @no_reverse_charge %{rc_cgst_amount: 0, rc_sgst_amount: 0, rc_igst_amount: 0, rc_cess_amount: 0}
+
   @doc """
   The invoice totals for `items`. `ctx` holds `:regime` plus, for GST,
-  `:intra_state?`, and for VAT `:reverse_charge` and `:prices_include_tax`.
-  `:round_to_whole_units` false leaves the total unrounded under either; under
-  VAT `:currency` sets the whole unit (1000 fils for KWD).
+  `:intra_state?`, and under either `:reverse_charge`; for VAT also
+  `:prices_include_tax`. `:round_to_whole_units` false leaves the total
+  unrounded under either; under VAT `:currency` sets the whole unit (1000 fils
+  for KWD).
+
+  A reverse-charge invoice charges no tax (CGST Act section 9(3), IGST Act
+  section 5(3)): under GST its CGST, SGST, IGST and cess are 0 and the total
+  is the taxable value plus round-off, as under VAT. The tax the recipient
+  pays is returned in `rc_cgst_amount`, `rc_sgst_amount`, `rc_igst_amount`
+  and `rc_cess_amount`, for the document, GSTR-1 and the e-invoice.
   """
-  def totals(items, %{regime: "vat"} = ctx), do: VAT.totals(items, ctx)
+  def totals(items, %{regime: "vat"} = ctx),
+    do: items |> VAT.totals(ctx) |> Map.merge(@no_reverse_charge)
 
   def totals(items, ctx) do
     items
     |> GST.totals(Map.get(ctx, :intra_state?, true))
+    |> reverse_charge(Map.get(ctx, :reverse_charge) == true)
     |> Map.merge(%{vat_amount: 0, tax_breakdown: []})
     |> unrounded(Map.get(ctx, :round_to_whole_units, true))
+  end
+
+  defp reverse_charge(totals, false), do: Map.merge(totals, @no_reverse_charge)
+
+  defp reverse_charge(totals, true) do
+    {grand_total, round_off} = QuantumBilling.Money.round_to_rupee(totals.taxable_value)
+
+    Map.merge(totals, %{
+      rc_cgst_amount: totals.cgst_amount,
+      rc_sgst_amount: totals.sgst_amount,
+      rc_igst_amount: totals.igst_amount,
+      rc_cess_amount: totals.cess_amount,
+      cgst_amount: 0,
+      sgst_amount: 0,
+      igst_amount: 0,
+      cess_amount: 0,
+      round_off: round_off,
+      grand_total: grand_total
+    })
+  end
+
+  @doc "The reverse-charge tax a GST document records, in minor units: 0 unless reverse charge."
+  def reverse_charge_tax(document) do
+    (Map.get(document, :rc_cgst_amount) || 0) + (Map.get(document, :rc_sgst_amount) || 0) +
+      (Map.get(document, :rc_igst_amount) || 0) + (Map.get(document, :rc_cess_amount) || 0)
   end
 
   defp unrounded(totals, false),
@@ -151,11 +188,68 @@ defmodule QuantumBilling.Tax do
   @doc "Why `feature` (`:e_invoice`, `:e_way_bills`, `:gstr1`, `:hsn_finder`) is refused under VAT."
   def gst_only_message(feature), do: Map.fetch!(@gst_only, feature)
 
-  @doc "The note a VAT invoice prints under its totals, or nil."
+  @doc """
+  The reverse-charge note a document prints under its totals, or nil.
+
+  Under GST it is the declaration Rule 46(p) of the CGST Rules requires; the
+  tax rate and amount are listed with it (`reverse_charge_heads/1`).
+  """
   def reverse_charge_legend(%{tax_regime: "vat", reverse_charge: true}),
     do: "Reverse charge: the customer is to account for the VAT."
 
-  def reverse_charge_legend(_invoice), do: nil
+  def reverse_charge_legend(%{reverse_charge: true}),
+    do:
+      "Tax payable on reverse charge basis: Yes. The recipient pays the GST below to " <>
+        "the government; it is not included in the total."
+
+  def reverse_charge_legend(_document), do: nil
+
+  @doc """
+  The GST a reverse-charge document leaves to the recipient, one entry per
+  head that has any: `%{label: "IGST @ 18%", amount: minor_units}`. CGST and
+  SGST are each half the line's GST rate. Empty for any other document.
+  """
+  def reverse_charge_heads(%{reverse_charge: true, tax_regime: regime} = document)
+      when regime in ["gst", nil] do
+    rates = gst_rates(Map.get(document, :items))
+
+    [
+      {"CGST", Map.get(document, :rc_cgst_amount), &half/1},
+      {"SGST", Map.get(document, :rc_sgst_amount), &half/1},
+      {"IGST", Map.get(document, :rc_igst_amount), & &1},
+      {"Cess", Map.get(document, :rc_cess_amount), nil}
+    ]
+    |> Enum.filter(fn {_head, amount, _rate} -> is_integer(amount) and amount > 0 end)
+    |> Enum.map(fn {head, amount, rate_of} ->
+      %{label: head_label(head, rates, rate_of), amount: amount}
+    end)
+  end
+
+  def reverse_charge_heads(_document), do: []
+
+  defp gst_rates(items) when is_list(items) do
+    items
+    |> Enum.map(& &1.tax_rate)
+    |> Enum.filter(&(is_integer(&1) and &1 > 0))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp gst_rates(_not_loaded), do: []
+
+  defp head_label(head, [], _rate_of), do: head
+  defp head_label(head, _rates, nil), do: head
+
+  defp head_label(head, rates, rate_of),
+    do: "#{head} @ " <> Enum.map_join(rates, ", ", &(&1 |> rate_of.() |> rate_text())) <> "%"
+
+  defp half(rate), do: rate / 2
+
+  defp rate_text(rate) when is_float(rate) and rate == trunc(rate),
+    do: Integer.to_string(trunc(rate))
+
+  defp rate_text(rate) when is_float(rate), do: :erlang.float_to_binary(rate, decimals: 1)
+  defp rate_text(rate), do: Integer.to_string(rate)
 
   @doc """
   Reads a typed percentage as basis points: `"7.5"` is 750. Two decimals at most.
