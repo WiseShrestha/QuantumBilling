@@ -7,6 +7,7 @@ defmodule QuantumBilling.EWayBillsTest do
 
   alias QuantumBilling.EWayBills
   alias QuantumBilling.EWayBills.EWayBill
+  alias QuantumBilling.EWayBills.Validity
   alias QuantumBilling.Invoices.Invoice
 
   defp invoice_fixture(attrs \\ %{}) do
@@ -65,9 +66,15 @@ defmodule QuantumBilling.EWayBillsTest do
       short = bill_fixture(nil, %{"distance_km" => "180"})
       long = bill_fixture(nil, %{"distance_km" => "620"})
 
-      assert NaiveDateTime.to_date(short.valid_until) == Date.add(Date.utc_today(), 1)
-      assert NaiveDateTime.to_date(long.valid_until) == Date.add(Date.utc_today(), 4)
-      assert NaiveDateTime.to_time(short.valid_until) == ~T[23:59:59]
+      # Stored in UTC, counted in IST: the day ends at 23:59:59 IST.
+      today = Validity.ist_date(NaiveDateTime.utc_now())
+      short_ist = Validity.to_ist(short.valid_until)
+      long_ist = Validity.to_ist(long.valid_until)
+
+      assert NaiveDateTime.to_date(short_ist) == Date.add(today, 1)
+      assert NaiveDateTime.to_date(long_ist) == Date.add(today, 4)
+      assert NaiveDateTime.to_time(short_ist) == ~T[23:59:59]
+      assert short.ewb_date == today
     end
 
     test "refuses an invoice that already carries a live bill" do
@@ -199,7 +206,7 @@ defmodule QuantumBilling.EWayBillsTest do
       assert {:error, %Ecto.Changeset{} = changeset} =
                EWayBills.update_part_b(bill, %{"mode_of_transport" => "Road"})
 
-      assert "can't be blank" in errors_on(changeset).vehicle_number
+      assert "is required when the goods go by road" in errors_on(changeset).vehicle_number
     end
 
     test "refuses a cancelled bill" do

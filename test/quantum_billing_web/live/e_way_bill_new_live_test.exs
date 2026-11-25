@@ -4,6 +4,7 @@ defmodule QuantumBillingWeb.EWayBillNewLiveTest do
   import Phoenix.LiveViewTest
 
   alias QuantumBilling.EWayBills
+  alias QuantumBilling.EWayBills.Validity
   alias QuantumBilling.Invoices.Invoice
   alias QuantumBilling.Repo
 
@@ -160,8 +161,74 @@ defmodule QuantumBillingWeb.EWayBillNewLiveTest do
     assert bill.distance_km == 150
     assert bill.vehicle_number == "MH01AB1234"
     assert bill.status == "Active"
-    # One day per 200 km, so 150 km expires at the end of tomorrow.
-    assert NaiveDateTime.to_date(bill.valid_until) == Date.add(Date.utc_today(), 1)
+    # One day per 200 km, so 150 km expires at the end of tomorrow, in IST.
+    today = Validity.ist_date(NaiveDateTime.utc_now())
+
+    assert Validity.to_ist(bill.valid_until) ==
+             NaiveDateTime.new!(Date.add(today, 1), ~T[23:59:59])
+  end
+
+  # Issue #80: an expired bill no longer blocks the invoice.
+  test "an invoice whose bill has expired can be billed again", %{conn: conn} do
+    invoice = invoice_fixture()
+
+    {:ok, bill} =
+      EWayBills.generate_e_way_bill(invoice, %{
+        "distance_km" => "150",
+        "vehicle_number" => "MH01AB1234"
+      })
+
+    bill |> Ecto.Changeset.change(valid_until: ~N[2020-01-01 00:00:00]) |> Repo.update!()
+
+    {:ok, view, html} = live(conn, ~p"/e-way-bills/new")
+
+    # Offered in the invoice picker again.
+    assert html =~ invoice.invoice_number
+
+    assert {:error, {:redirect, %{to: to}}} =
+             view |> form("#ewb-form", e_way_bill: valid_attrs()) |> render_submit()
+
+    replacement = EWayBills.live_bill_for_invoice(invoice.id)
+
+    assert to == "/e-way-bills/#{replacement.id}/print"
+    assert replacement.id != bill.id
+    assert Repo.reload!(bill).status == "Expired"
+  end
+
+  for mode <- ["Rail", "Air", "Ship"] do
+    test "#{mode} is issued with its transport document and no vehicle", %{conn: conn} do
+      invoice = invoice_fixture()
+
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills/new")
+
+      html =
+        view
+        |> form("#ewb-form",
+          e_way_bill: valid_attrs(%{"transport_mode" => unquote(mode), "vehicle_no" => ""})
+        )
+        |> render_submit()
+
+      assert html =~ "is required for #{unquote(mode)}"
+      assert EWayBills.live_bill_for_invoice(invoice.id) == nil
+
+      assert {:error, {:redirect, _}} =
+               view
+               |> form("#ewb-form",
+                 e_way_bill:
+                   valid_attrs(%{
+                     "transport_mode" => unquote(mode),
+                     "vehicle_no" => "",
+                     "transport_document_number" => "DOC2024",
+                     "transport_document_date" => "2024-05-29"
+                   })
+               )
+               |> render_submit()
+
+      bill = EWayBills.live_bill_for_invoice(invoice.id)
+      assert bill.mode_of_transport == unquote(mode)
+      assert bill.vehicle_number == nil
+      assert bill.transport_document_number == "DOC2024"
+    end
   end
 
   test "a document number no invoice carries is a form error", %{conn: conn} do

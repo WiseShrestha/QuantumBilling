@@ -51,6 +51,7 @@ defmodule QuantumBilling.Audit.Catalog do
     {"generate_e_way_bill", "Generated e-way bill", "E-way bills", "hero-truck", :create},
     {"update_e_way_bill_part_b", "Updated e-way bill vehicle", "E-way bills", "hero-truck",
      :update},
+    {"extend_e_way_bill", "Extended e-way bill validity", "E-way bills", "hero-clock", :update},
     {"cancel_e_way_bill", "Cancelled e-way bill", "E-way bills", "hero-no-symbol", :danger},
     {"bin_e_way_bill", "Moved e-way bill to the Bin", "E-way bills", "hero-trash", :danger},
     {"restore_e_way_bill", "Restored e-way bill from the Bin", "E-way bills",

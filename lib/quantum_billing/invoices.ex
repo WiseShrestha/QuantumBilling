@@ -88,22 +88,20 @@ defmodule QuantumBilling.Invoices do
   @doc """
   Invoices that can still get an e-way bill, newest first.
 
-  Excludes cancelled invoices and those with a live bill. A cancelled bill
-  does not exclude its invoice (Rule 138(9)).
+  Excludes cancelled invoices and those with a live bill
+  (`EWayBills.live/1`). A cancelled bill (Rule 138(9)) or an expired one does
+  not exclude its invoice.
   """
   def awaiting_e_way_bill(limit \\ 50) do
+    live_bills =
+      QuantumBilling.EWayBills.EWayBill.kept()
+      |> QuantumBilling.EWayBills.live()
+      |> where([b], b.invoice_id == parent_as(:invoice).id)
+      |> select(1)
+
     Invoice.kept()
     |> where([i], i.status != "Cancelled")
-    |> where(
-      [i],
-      not exists(
-        from b in QuantumBilling.EWayBills.EWayBill,
-          where:
-            b.invoice_id == parent_as(:invoice).id and b.status != "Cancelled" and
-              is_nil(b.deleted_at),
-          select: 1
-      )
-    )
+    |> where([i], not exists(live_bills))
     |> from(as: :invoice)
     |> order_by([i], desc: i.invoice_date, desc: i.id)
     |> limit(^limit)
@@ -813,7 +811,9 @@ defmodule QuantumBilling.Invoices do
 
   Refused with `:already_cancelled`, `:paid` (needs a credit note), `:credited`
   (its credit notes already reverse it),
-  `:irn_registered` or `:live_e_way_bill`. `opts` carries audit fields.
+  `:irn_registered` or `:live_e_way_bill`. An expired or cancelled e-way
+  bill does not block it (`EWayBills.live_bill_for_invoice/1`). `opts` carries
+  audit fields.
 
   A Razorpay payment link is cancelled in the background
   (`QuantumBilling.Workers.PaymentLinkCancelWorker`), so an outage there does

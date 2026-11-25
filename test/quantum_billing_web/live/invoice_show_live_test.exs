@@ -322,6 +322,30 @@ defmodule QuantumBillingWeb.InvoiceShowLiveTest do
       refute has_element?(view, "#demo-irn-panel")
     end
 
+    # Issue #80: the page used `Repo.one/1` and crashed on two non-cancelled bills.
+    test "an expired e-way bill offers a new one, and the replacement is shown", %{conn: conn} do
+      invoice = create_invoice()
+      {:ok, old} = QuantumBilling.EWayBills.generate_e_way_bill(invoice, %{})
+
+      old
+      |> Ecto.Changeset.change(valid_until: ~N[2020-01-01 00:00:00])
+      |> QuantumBilling.Repo.update!()
+
+      {:ok, view, _html} = live(conn, ~p"/invoices/#{invoice.id}")
+
+      refute has_element?(view, "#ewb-mode-badge")
+      assert has_element?(view, "#drawer-generate-ewb")
+
+      {:ok, new} = QuantumBilling.EWayBills.generate_e_way_bill(invoice, %{})
+
+      {:ok, _view, html} = live(conn, ~p"/invoices/#{invoice.id}")
+
+      # The panel shows the replacement; the old number may still appear in
+      # the invoice's activity history.
+      assert html =~ "EWB No: #{new.ewb_number}"
+      refute html =~ "EWB No: #{old.ewb_number}"
+    end
+
     test "an e-way bill shows the mode that issued it", %{conn: conn} do
       invoice = create_invoice()
       {:ok, _bill} = QuantumBilling.EWayBills.generate_e_way_bill(invoice, %{})

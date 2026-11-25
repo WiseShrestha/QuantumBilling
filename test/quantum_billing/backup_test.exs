@@ -66,7 +66,7 @@ defmodule QuantumBilling.BackupTest do
       json = Backup.export_json()
       data = Jason.decode!(json)
 
-      assert data["version"] == "3.3"
+      assert data["version"] == "3.4"
       assert [%{"name" => "Acme Corp"}] = data["clients"]
       assert [%{"invoice_number" => number}] = data["invoices"]
       assert is_binary(number)
@@ -161,6 +161,57 @@ defmodule QuantumBilling.BackupTest do
       # Sequences moved past the restored ids.
       fresh = QuantumBilling.QuotationsFixtures.quotation_fixture(scope)
       assert fresh.id > binned.id
+    end
+
+    test "brings back e-way bill extensions and transport documents" do
+      invoice = invoice_fixture(client_fixture())
+
+      {:ok, bill} =
+        EWayBills.generate_e_way_bill(invoice, %{
+          "distance_km" => "300",
+          "mode_of_transport" => "Rail",
+          "transport_document_number" => "RR4455",
+          "transport_document_date" => "2026-03-02"
+        })
+
+      soon = NaiveDateTime.utc_now() |> NaiveDateTime.add(3600) |> NaiveDateTime.truncate(:second)
+      bill = bill |> Ecto.Changeset.change(valid_until: soon) |> Repo.update!()
+
+      {:ok, extended} =
+        EWayBills.extend_validity(bill, %{
+          "reason" => "Transshipment",
+          "remarks" => "Wagon change at Itarsi",
+          "from_place" => "Itarsi",
+          "from_state" => "Madhya Pradesh (23)",
+          "from_pincode" => "461111",
+          "remaining_distance_km" => "200",
+          "consignment_status" => "In Movement",
+          "mode_of_transport" => "Rail",
+          "transport_document_number" => "RR4456",
+          "transport_document_date" => "2026-03-03"
+        })
+
+      json = Backup.export_json()
+
+      assert {:ok, %{e_way_bill_extensions: 1}} = Backup.restore_json(json)
+
+      restored = EWayBills.get_e_way_bill(bill.id)
+      assert restored.transport_document_number == "RR4456"
+      assert restored.valid_until == extended.valid_until
+      assert [%{reason: "Transshipment", previous_valid_until: ^soon}] = restored.extensions
+    end
+
+    test "a 3.3 file without e-way bill extensions still restores" do
+      invoice_fixture(client_fixture())
+
+      json =
+        Backup.export_json()
+        |> Jason.decode!()
+        |> Map.delete("e_way_bill_extensions")
+        |> Map.put("version", "3.3")
+        |> Jason.encode!()
+
+      assert {:ok, %{e_way_bill_extensions: 0, invoices: 1}} = Backup.restore_json(json)
     end
 
     test "a 3.2 file without quotations still restores" do
@@ -773,7 +824,7 @@ defmodule QuantumBilling.BackupTest do
 
       # Streamed: the download starts on the first chunk and is never held in memory whole.
       assert length(chunks) > 25
-      assert hd(chunks) =~ ~s("version":"3.3")
+      assert hd(chunks) =~ ~s("version":"3.4")
 
       document = chunks |> Enum.join() |> Jason.decode!()
       assert length(document["invoices"]) == 25

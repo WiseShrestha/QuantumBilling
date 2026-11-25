@@ -308,6 +308,143 @@ defmodule QuantumBillingWeb.EWayBillsLiveTest do
     end
   end
 
+  describe "extending validity (Rule 138(10))" do
+    defp valid_for(bill, seconds) do
+      valid_until =
+        NaiveDateTime.utc_now()
+        |> NaiveDateTime.add(seconds, :second)
+        |> NaiveDateTime.truncate(:second)
+
+      bill |> Ecto.Changeset.change(valid_until: valid_until) |> Repo.update!()
+    end
+
+    defp extension_form do
+      %{
+        "reason" => "Law and Order Situation",
+        "remarks" => "Highway blockade",
+        "from_place" => "Hubli",
+        "from_state" => "Karnataka (29)",
+        "from_pincode" => "580020",
+        "remaining_distance_km" => "90",
+        "consignment_status" => "In Movement",
+        "mode_of_transport" => "Road",
+        "vehicle_number" => "KA25AB1234"
+      }
+    end
+
+    test "is offered from 8 hours before expiry, and extends the bill", %{conn: conn} do
+      bill = bill(%{client_name: "Northwind Traders"}) |> valid_for(3600)
+      far = bill(%{client_name: "Contoso"})
+
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+
+      assert has_element?(
+               view,
+               ~s(button[aria-label="Extend validity of e-way bill #{bill.ewb_number}"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(button[aria-label="Extend validity of e-way bill #{far.ewb_number}"])
+             )
+
+      render_click(view, "open_action", %{"action" => "extend", "id" => to_string(bill.id)})
+      html = view |> form("#ewb-extend-form", extension_form()) |> render_submit()
+
+      assert html =~ "extended: valid until"
+      refute has_element?(view, "#ewb-extend-form")
+
+      extended = EWayBills.get_e_way_bill(bill.id)
+      assert NaiveDateTime.compare(extended.valid_until, bill.valid_until) == :gt
+      assert extended.vehicle_number == "KA25AB1234"
+      assert [%{reason: "Law and Order Situation"}] = extended.extensions
+    end
+
+    test "is offered on a bill that reads as expired, within 8 hours", %{conn: conn} do
+      bill = bill(%{client_name: "Northwind Traders"}) |> valid_for(-3600)
+
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+
+      assert has_element?(
+               view,
+               ~s(button[aria-label="Extend validity of e-way bill #{bill.ewb_number}"])
+             )
+
+      render_click(view, "open_action", %{"action" => "extend", "id" => to_string(bill.id)})
+      view |> form("#ewb-extend-form", extension_form()) |> render_submit()
+
+      assert EWayBills.status(EWayBills.get_e_way_bill(bill.id)) == "Active"
+    end
+
+    test "says why when the window has closed", %{conn: conn} do
+      bill = bill(%{client_name: "Northwind Traders"}) |> valid_for(-9 * 3600)
+
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+
+      refute has_element?(
+               view,
+               ~s(button[aria-label="Extend validity of e-way bill #{bill.ewb_number}"])
+             )
+
+      # A stale page can still submit; the context refuses.
+      render_click(view, "open_action", %{"action" => "extend", "id" => to_string(bill.id)})
+      html = view |> form("#ewb-extend-form", extension_form()) |> render_submit()
+
+      assert html =~ "Rule 138(10) allows an extension only"
+      assert EWayBills.get_e_way_bill(bill.id).extensions == []
+    end
+
+    test "shows the first missing detail", %{conn: conn} do
+      bill = bill(%{client_name: "Northwind Traders"}) |> valid_for(3600)
+
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+
+      render_click(view, "open_action", %{"action" => "extend", "id" => to_string(bill.id)})
+
+      html =
+        view
+        |> form("#ewb-extend-form", Map.put(extension_form(), "from_pincode", "12"))
+        |> render_submit()
+
+      assert html =~ "From pincode must be a 6-digit PIN code."
+    end
+  end
+
+  describe "Part-B by Rail, Air and Ship" do
+    for mode <- ["Rail", "Air", "Ship"] do
+      test "#{mode} takes the transport document instead of a vehicle", %{conn: conn} do
+        bill = bill(%{client_name: "Northwind Traders"})
+
+        {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+        render_click(view, "open_action", %{"action" => "part_b", "id" => to_string(bill.id)})
+
+        html =
+          view
+          |> form("#ewb-part-b-form", %{
+            "mode_of_transport" => unquote(mode),
+            "vehicle_number" => ""
+          })
+          |> render_submit()
+
+        assert html =~ "is required for #{unquote(mode)}"
+
+        view
+        |> form("#ewb-part-b-form", %{
+          "mode_of_transport" => unquote(mode),
+          "vehicle_number" => "",
+          "transport_document_number" => "DOC5566",
+          "transport_document_date" => "2026-03-02",
+          "place" => "Mumbai"
+        })
+        |> render_submit()
+
+        updated = EWayBills.get_e_way_bill(bill.id)
+        assert updated.mode_of_transport == unquote(mode)
+        assert updated.transport_document_number == "DOC5566"
+      end
+    end
+  end
+
   describe "moving a bill to the Bin" do
     test "is offered on a bill in every state", %{conn: conn} do
       active = bill(%{client_name: "Active Co"})

@@ -17,7 +17,7 @@ One PostgreSQL database holds shared account data in `public` and separate busin
 | `public` | `rate_limits` | Rate-limit counters shared by every server (UNLOGGED). |
 | `public` | `oban_jobs`, `oban_peers` | Shared background-job storage and leader coordination. |
 | `public` | `schema_migrations` | Ecto's record of shared/public migrations. |
-| Each `biz_N` | `organization_settings`, `clients`, `invoices`, `invoice_items`, `credit_notes`, `e_way_bills`, `e_way_bill_part_b_updates`, `recurring_profiles`, `invoice_templates`, `design_assets`, `notifications`, `email_deliveries`, `audit_logs`, `webhook_events`, `webhook_endpoints`, `webhook_deliveries`, `compliance_tasks`, `compliance_filings`, `calendar_connections`, `calendar_event_links` | The selected business's operational data. |
+| Each `biz_N` | `organization_settings`, `clients`, `invoices`, `invoice_items`, `credit_notes`, `e_way_bills`, `e_way_bill_part_b_updates`, `e_way_bill_extensions`, `recurring_profiles`, `invoice_templates`, `design_assets`, `notifications`, `email_deliveries`, `audit_logs`, `webhook_events`, `webhook_endpoints`, `webhook_deliveries`, `compliance_tasks`, `compliance_filings`, `calendar_connections`, `calendar_event_links` | The selected business's operational data. |
 | Each `biz_N` | `schema_migrations` | Ecto's record of tenant migrations for that schema. |
 
 Business tables do not carry a `business_id` column. Their schema establishes ownership. Consequently, invoice ID `42` in `biz_1` and invoice ID `42` in `biz_2` are different invoices. Invoice numbers, GSTIN uniqueness, public invoice tokens, and webhook event uniqueness are enforced within each business schema.
@@ -465,29 +465,52 @@ Source: [credit-note schema](../lib/quantum_billing/credit_notes/credit_note.ex)
 | `status` | `varchar(255)` | Required; `Active` |
 | `distance_km` | `integer` | Required |
 | `mode_of_transport` | `varchar(255)` | Required; `Road` |
-| `vehicle_number`, `transporter_id`, `transporter_name` | `varchar(255)` | Nullable |
+| `vehicle_number`, `transporter_id`, `transporter_name` | `varchar(255)` | Nullable; the vehicle is required by the application for Road |
+| `transport_document_number` | `varchar(255)` | Nullable; required by the application for Rail, Air and Ship |
+| `transport_document_date` | `date` | Nullable; as above |
 | `cancelled_at` | timestamp | Nullable |
 | `cancellation_reason` | `varchar(255)` | Nullable |
 | `custom_fields` | `jsonb` | Required; `{}` |
 | `deleted_at` | timestamp | Nullable; Bin marker |
 
-Application statuses stored in this table are Active and Cancelled. E-way bills are an India GST feature: a VAT business cannot create one, and a VAT invoice never has one. Expiry is calculated from validity; it is not an additional persisted status enum. `valid_until` is a naive datetime with no stored offset. The current expiry code compares it to `NaiveDateTime.utc_now()`, and sandbox validity is generated from that same clock; it is not an Ecto `:utc_datetime` column.
+Application statuses stored in this table are Active, Cancelled and Expired. E-way bills are an India GST feature: a VAT business cannot create one, and a VAT invoice never has one. A bill past its validity reads as Expired while it is still stored as Active, so it can be extended; it is stored as Expired when a new bill replaces it, in the same transaction as the new bill's insert. `valid_until` is a naive datetime holding UTC: the expiry code compares it to `NaiveDateTime.utc_now()`, and the screens, export and API convert it to IST. It is not an Ecto `:utc_datetime` column. Rows written before the `20261125164958` tenant migration keep the value they were given, which ended at 23:59:59 UTC; they are not rewritten.
 
-Indexes cover unique `ewb_number`, `invoice_id`, `status`, `(ewb_date, id)`, substring search on `ewb_number` using GIN trigrams, and binned `deleted_at` rows. `e_way_bills_one_live_bill_per_invoice_index` uniquely covers `invoice_id` where `status <> 'Cancelled' AND deleted_at IS NULL`. This retains old cancelled bills while allowing a replacement. Restoring a binned bill can fail if another live bill has taken its invoice's slot.
+Indexes cover unique `ewb_number`, `invoice_id`, `status`, `(ewb_date, id)`, substring search on `ewb_number` using GIN trigrams, and binned `deleted_at` rows. `e_way_bills_one_live_bill_per_invoice_index` uniquely covers `invoice_id` where `status = 'Active' AND deleted_at IS NULL`. This retains old cancelled and expired bills while allowing a replacement. (Until the `20261125164958` tenant migration it covered `status <> 'Cancelled'`, which is the same set of rows for data written before it.) Restoring a binned bill can fail if another Active bill has taken its invoice's slot.
 
 ### `e_way_bill_part_b_updates`
 
 | Columns | SQL type | Required/default |
 | --- | --- | --- |
 | `e_way_bill_id` | `bigint` FK → same-schema `e_way_bills.id` | Required; delete cascades |
-| `vehicle_number` | `varchar(255)` | Required |
+| `vehicle_number` | `varchar(255)` | Nullable; required by the application for Road |
 | `mode_of_transport` | `varchar(255)` | Required; `Road` |
+| `transport_document_number` | `varchar(255)` | Nullable; required by the application for Rail, Air and Ship |
+| `transport_document_date` | `date` | Nullable; as above |
 | `place`, `reason` | `varchar(255)` | Nullable |
 | `updated_on` | timestamp | Required; transport update time |
 
 `e_way_bill_id` is indexed. A separate child row retains each Part-B vehicle update, instead of replacing a single vehicle column on the invoice.
 
-Sources: [e-way bill schema](../lib/quantum_billing/e_way_bills/e_way_bill.ex), [Part-B schema](../lib/quantum_billing/e_way_bills/part_b_update.ex), [e-way bill table migration and historical backfill](../priv/repo/migrations/20260925103207_create_e_way_bills.exs).
+### `e_way_bill_extensions`
+
+One row per validity extension (Rule 138(10)).
+
+| Columns | SQL type | Required/default |
+| --- | --- | --- |
+| `e_way_bill_id` | `bigint` FK → same-schema `e_way_bills.id` | Required; delete cascades |
+| `previous_valid_until`, `valid_until` | `timestamp(0) without time zone` | Required; UTC, before and after the extension |
+| `reason`, `remarks` | `varchar(255)` | Required |
+| `consignment_status` | `varchar(255)` | Required; `In Movement` or `In Transit` |
+| `transit_type`, `address` | `varchar(255)` | Nullable; set for goods in transit |
+| `from_place`, `from_state`, `from_pincode` | `varchar(255)` | Required; where the goods are |
+| `remaining_distance_km` | `integer` | Required |
+| `mode_of_transport`, `vehicle_number`, `transport_document_number` | `varchar(255)` | Nullable; set for goods in movement |
+| `transport_document_date` | `date` | Nullable |
+| `extended_on` | `timestamp(0)` UTC | Required |
+
+`e_way_bill_id` is indexed. The bill's own `valid_until` is the latest extension's.
+
+Sources: [e-way bill schema](../lib/quantum_billing/e_way_bills/e_way_bill.ex), [Part-B schema](../lib/quantum_billing/e_way_bills/part_b_update.ex), [extension schema](../lib/quantum_billing/e_way_bills/e_way_bill_extension.ex), [e-way bill table migration and historical backfill](../priv/repo/migrations/20260925103207_create_e_way_bills.exs), [expiry, extension and transport-document migration](../priv/repo/tenant_migrations/20261125164958_e_way_bill_expiry_extensions_and_transport_documents.exs).
 
 ### `recurring_profiles`
 
@@ -898,7 +921,7 @@ Sources: [schema-transfer migration](../priv/repo/migrations/20261015115410_move
 
 ## 9. Backup boundaries
 
-The application's JSON export is a business-data export, not a full PostgreSQL backup. Format version `3.3` stores money in minor units and can upgrade the supported older `2.0`, `2.1`, `3.0`, `3.1` and `3.2` files on restore; a file older than `3.3` has no quotations and restores with none. Files older than `3.2` were written before VAT, so restore treats every record in them as GST: `tax_regime` `gst`, `vat_amount` 0, an empty `tax_breakdown`, no reverse charge, rounding on, and client `country` `IN`. Files without custom fields restore with `custom_fields` `{}`.
+The application's JSON export is a business-data export, not a full PostgreSQL backup. Format version `3.4` stores money in minor units and can upgrade the supported older `2.0`, `2.1`, `3.0`, `3.1`, `3.2` and `3.3` files on restore; a file older than `3.3` has no quotations and restores with none, and a file older than `3.4` has no e-way bill extensions or transport documents. Files older than `3.2` were written before VAT, so restore treats every record in them as GST: `tax_regime` `gst`, `vat_amount` 0, an empty `tax_breakdown`, no reverse charge, rounding on, and client `country` `IN`. Files without custom fields restore with `custom_fields` `{}`.
 
 The export includes selected organization settings (with the tax regime, VAT number and country, inclusive pricing and rounding) plus, in restore order, field definitions, tax rates, clients, templates, design-asset records, quotations (without `user_id`, which points at `public.users`; with `public_token` and `deleted_at`, so links and Bin state survive), quotation items, invoices (with `quotation_id`), invoice items, e-way bills, Part-B updates, recurring profiles, credit notes, compliance tasks, compliance filings (without `user_id`, as tasks leave out their author), and audit logs. A file written before filings existed restores with none. Every record type that has `custom_fields` exports it. Restore drops a field definition whose object, key or type is not valid. It retains deleted/archived markers. It omits protected credentials, calendar connections and their event links, users, sessions, TOTP enrolments, memberships, business definitions, installation settings, Oban jobs/peers, notifications, email delivery history, and incoming webhook events. Uploaded logo and design-image bytes are not embedded; a path reference alone is not an asset backup. Restore drops `design_assets` rows whose path or kind is malformed. A restored row makes that business the owner of the path, which is the same trust a restore already gives `doc_logo_path`; paths are unguessable content hashes, so only someone who already has the file name can claim it this way.
 

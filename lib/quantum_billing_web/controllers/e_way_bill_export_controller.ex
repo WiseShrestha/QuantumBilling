@@ -84,7 +84,10 @@ defmodule QuantumBillingWeb.EWayBillExportController do
   defp valid_until(nil), do: ""
 
   defp valid_until(%NaiveDateTime{} = valid_until) do
-    Calendar.strftime(valid_until, "%d/%m/%Y %H:%M")
+    # Stored in UTC; exported in Indian time.
+    valid_until
+    |> QuantumBilling.EWayBills.Validity.to_ist()
+    |> Calendar.strftime("%d/%m/%Y %H:%M")
   end
 
   # Plain rupee numbers, from paise, so a spreadsheet can sum them.

@@ -33,7 +33,8 @@ defmodule QuantumBillingWeb.API.V1.EWayBillJSON do
       id: bill.id,
       number: bill.ewb_number,
       date: bill.ewb_date,
-      valid_until: bill.valid_until,
+      # Stored in UTC; the API documents Indian local time with no offset.
+      valid_until: QuantumBilling.EWayBills.Validity.to_ist(bill.valid_until),
       # Derived, not stored: "Expired" is worked out from `valid_until`, so the
       # column alone would call a lapsed bill "Active".
       status: QuantumBilling.EWayBills.status(bill),

@@ -85,7 +85,7 @@ defmodule QuantumBilling.EWayBills.EWayBillForm do
 
   @required ~w(supply_type sub_type document_type document_no document_date
                transaction_type from_party from_state to_party to_state
-               total_goods_value transport_mode vehicle_no from_place to_place
+               total_goods_value transport_mode from_place to_place
                distance_km)a
 
   @amount_fields ~w(total_goods_value cgst_value sgst_value igst_value other_amount)a
@@ -119,7 +119,11 @@ defmodule QuantumBilling.EWayBills.EWayBillForm do
     field :transport_mode, :string
     field :transporter_name, :string
     field :transporter_id, :string
+    # Road: the vehicle. Rail, Air and Ship: the railway receipt, airway bill
+    # or bill of lading.
     field :vehicle_no, :string
+    field :transport_document_number, :string
+    field :transport_document_date, :date
     field :from_place, :string
     field :to_place, :string
     # Rule 138(10): validity depends on distance.
@@ -152,7 +156,8 @@ defmodule QuantumBilling.EWayBills.EWayBillForm do
     |> validate_number(:distance_km, greater_than: 0, less_than_or_equal_to: 4000)
     |> validate_amounts()
     |> update_change(:vehicle_no, &String.upcase(String.replace(&1 || "", ~r/\s/, "")))
-    |> validate_format(:vehicle_no, @vehicle_format, message: "must look like MH01AB1234")
+    |> QuantumBilling.EWayBills.EWayBill.validate_transport(:transport_mode, :vehicle_no)
+    |> validate_vehicle_format()
     |> validate_gstin(:from_gstin)
     |> validate_gstin(:to_gstin)
     |> validate_transporter_id()
@@ -168,6 +173,16 @@ defmodule QuantumBilling.EWayBills.EWayBillForm do
     form
     |> changeset(attrs)
     |> Map.put(:action, :validate)
+  end
+
+  # The registration-number format is for road vehicles only.
+  defp validate_vehicle_format(changeset) do
+    if get_field(changeset, :transport_mode) == "Road",
+      do:
+        validate_format(changeset, :vehicle_no, @vehicle_format,
+          message: "must look like MH01AB1234"
+        ),
+      else: validate_length(changeset, :vehicle_no, max: 20)
   end
 
   defp validate_amounts(changeset) do

@@ -701,7 +701,10 @@ defmodule QuantumBillingWeb.EWayBillDoc.Document do
   defp on_date(%Date{} = date), do: Calendar.strftime(date, "%d/%m/%Y")
   defp on_date(_missing), do: "—"
 
-  defp on_datetime(%NaiveDateTime{} = at), do: Calendar.strftime(at, "%d/%m/%Y %I:%M %p")
+  # `valid_until` is stored in UTC; the EWB-01 prints Indian time.
+  defp on_datetime(%NaiveDateTime{} = at),
+    do: at |> QuantumBilling.EWayBills.Validity.to_ist() |> Calendar.strftime("%d/%m/%Y %I:%M %p")
+
   defp on_datetime(_missing), do: "—"
 
   defp on_datetime_utc(%DateTime{} = at), do: Calendar.strftime(at, "%d/%m/%Y %I:%M %p")

@@ -20,6 +20,7 @@ defmodule QuantumBilling.Backup do
   alias QuantumBilling.DesignAssets
   alias QuantumBilling.DesignAssets.DesignAsset
   alias QuantumBilling.EWayBills.EWayBill
+  alias QuantumBilling.EWayBills.EWayBillExtension
   alias QuantumBilling.EWayBills.PartBUpdate
   alias QuantumBilling.Invoices.Invoice
   alias QuantumBilling.Invoices.InvoiceItem
@@ -32,10 +33,10 @@ defmodule QuantumBilling.Backup do
   alias QuantumBilling.TaxRates.TaxRate
   alias QuantumBilling.Templates.InvoiceTemplate
 
-  @version "3.3"
+  @version "3.4"
 
   # Older files are still restored; upgrade/1 brings them to the current shape.
-  @readable_versions ["2.0", "2.1", "3.0", "3.1", "3.2", @version]
+  @readable_versions ["2.0", "2.1", "3.0", "3.1", "3.2", "3.3", @version]
 
   # Before 3.2 every record was GST; these are the VAT columns' values for it.
   @gst_defaults %{
@@ -117,9 +118,16 @@ defmodule QuantumBilling.Backup do
 
   @e_way_bill_fields ~w(id invoice_id ewb_number ewb_date valid_until status distance_km
                         mode_of_transport vehicle_number transporter_id transporter_name
-                        cancelled_at cancellation_reason deleted_at portal_mode custom_fields)a
+                        cancelled_at cancellation_reason deleted_at portal_mode custom_fields
+                        transport_document_number transport_document_date)a
 
-  @part_b_fields ~w(id e_way_bill_id vehicle_number mode_of_transport place reason updated_on)a
+  @part_b_fields ~w(id e_way_bill_id vehicle_number mode_of_transport place reason updated_on
+                    transport_document_number transport_document_date)a
+
+  @extension_fields ~w(id e_way_bill_id previous_valid_until valid_until reason remarks
+                       consignment_status transit_type address from_place from_state
+                       from_pincode remaining_distance_km mode_of_transport vehicle_number
+                       transport_document_number transport_document_date extended_on)a
 
   @template_fields ~w(id name layout_xml accent is_default archived_at)a
 
@@ -164,6 +172,7 @@ defmodule QuantumBilling.Backup do
     {:invoice_items, InvoiceItem, @item_fields},
     {:e_way_bills, EWayBill, @e_way_bill_fields},
     {:e_way_bill_part_b_updates, PartBUpdate, @part_b_fields},
+    {:e_way_bill_extensions, EWayBillExtension, @extension_fields},
     {:recurring_profiles, RecurringProfile, @profile_fields},
     {:credit_notes, CreditNote, @credit_note_fields},
     {:compliance_tasks, ComplianceTask, @compliance_task_fields},
@@ -260,6 +269,7 @@ defmodule QuantumBilling.Backup do
           Repo.delete_all(CreditNote)
           Repo.delete_all(InvoiceItem)
           Repo.delete_all(PartBUpdate)
+          Repo.delete_all(EWayBillExtension)
           Repo.delete_all(EWayBill)
           Repo.delete_all(Invoice)
           Repo.delete_all(QuotationItem)
@@ -280,7 +290,7 @@ defmodule QuantumBilling.Backup do
 
           # Rows keep their ids, so move every sequence past them.
           Enum.each(
-            ~w(field_definitions tax_rates clients quotations quotation_items invoices invoice_items e_way_bills e_way_bill_part_b_updates
+            ~w(field_definitions tax_rates clients quotations quotation_items invoices invoice_items e_way_bills e_way_bill_part_b_updates e_way_bill_extensions
                invoice_templates design_assets recurring_profiles credit_notes compliance_tasks
                compliance_filings audit_logs),
             &resync_sequence/1
@@ -408,7 +418,11 @@ defmodule QuantumBilling.Backup do
 
   # 3.2 had no quotations; their sections are simply absent, and invoices'
   # quotation_id reads as nil.
-  defp upgrade(%{"version" => "3.2"} = data), do: Map.put(data, "version", @version)
+  defp upgrade(%{"version" => "3.2"} = data), do: data |> Map.put("version", "3.3") |> upgrade()
+
+  # 3.3 had no e-way bill extensions or transport documents: the section is
+  # absent and the columns read as nil.
+  defp upgrade(%{"version" => "3.3"} = data), do: Map.put(data, "version", @version)
 
   defp upgrade(data), do: data
 

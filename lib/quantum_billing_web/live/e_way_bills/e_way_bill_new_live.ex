@@ -157,6 +157,8 @@ defmodule QuantumBillingWeb.EWayBillNewLive do
       "distance_km" => form.distance_km,
       "vehicle_number" => form.vehicle_no,
       "mode_of_transport" => form.transport_mode,
+      "transport_document_number" => form.transport_document_number,
+      "transport_document_date" => form.transport_document_date,
       "transporter_id" => form.transporter_id,
       "transporter_name" => form.transporter_name
     }
@@ -466,9 +468,25 @@ defmodule QuantumBillingWeb.EWayBillNewLive do
                 <.field
                   field={f[:vehicle_no]}
                   label="Vehicle No."
-                  required
+                  required={@summary.transport_mode == "Road"}
                   placeholder="MH01AB1234"
-                  hint="Format: MH01AB1234"
+                  hint={
+                    if @summary.transport_mode == "Road",
+                      do: "Format: MH01AB1234",
+                      else: "Optional for #{@summary.transport_mode}"
+                  }
+                />
+                <.field
+                  field={f[:transport_document_number]}
+                  label={transport_document_label(@summary.transport_mode) <> " No."}
+                  required={@summary.transport_mode != "Road"}
+                  placeholder={if @summary.transport_mode == "Road", do: "LR number (optional)"}
+                />
+                <.field
+                  field={f[:transport_document_date]}
+                  label={transport_document_label(@summary.transport_mode) <> " Date"}
+                  type="date"
+                  required={@summary.transport_mode != "Road"}
                 /> <.field field={f[:from_place]} label="From Place" required placeholder="Mumbai" />
                 <.field field={f[:to_place]} label="To Place" required placeholder="Pune" />
                 <.field
@@ -604,11 +622,17 @@ defmodule QuantumBillingWeb.EWayBillNewLive do
     |> assign(:validity, validity(summary.distance_km))
   end
 
+  # The portal's name for the transport document of each mode.
+  defp transport_document_label("Rail"), do: "Railway Receipt"
+  defp transport_document_label("Air"), do: "Airway Bill"
+  defp transport_document_label("Ship"), do: "Bill of Lading"
+  defp transport_document_label(_road), do: "Transport Doc."
+
   defp validity(nil), do: nil
 
   defp validity(distance_km) do
     days = Validity.days(distance_km)
-    until = Date.add(Date.utc_today(), days)
+    until = Date.add(Validity.ist_date(NaiveDateTime.utc_now()), days)
 
     "#{days} #{if days == 1, do: "day", else: "days"} · until #{format_date(until)}"
   end

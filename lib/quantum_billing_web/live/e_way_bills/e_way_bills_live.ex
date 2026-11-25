@@ -9,7 +9,10 @@ defmodule QuantumBillingWeb.EWayBillsLive do
 
   alias QuantumBilling.EWayBills
   alias QuantumBilling.EWayBills.EWayBill
+  alias QuantumBilling.EWayBills.EWayBillExtension
+  alias QuantumBilling.EWayBills.EWayBillForm
   alias QuantumBilling.EWayBills.NICClient
+  alias QuantumBilling.EWayBills.Validity
 
   @per_page 10
 
@@ -95,7 +98,7 @@ defmodule QuantumBillingWeb.EWayBillsLive do
   end
 
   def handle_event("open_action", %{"action" => action, "id" => id}, socket)
-      when action in ["cancel", "part_b"] do
+      when action in ["cancel", "part_b", "extend"] do
     case EWayBills.get_e_way_bill(id) do
       nil ->
         {:noreply, put_flash(socket, :error, "That e-way bill no longer exists.")}
@@ -143,6 +146,24 @@ defmodule QuantumBillingWeb.EWayBillsLive do
     end
   end
 
+  def handle_event("extend_validity", params, socket) do
+    case with_fresh_bill(socket, &EWayBills.extend_validity(&1, params)) do
+      {:ok, extended} ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "E-way bill #{extended.ewb_number} extended: valid until " <>
+             "#{format_ist(extended.valid_until)} IST."
+         )
+         |> assign(action: nil, action_bill: nil)
+         |> load_page()}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, extend_error(reason))}
+    end
+  end
+
   # Bins the bill; this is not a cancellation.
   def handle_event("delete", %{"id" => id}, socket) do
     case EWayBills.get_e_way_bill(id) do
@@ -187,6 +208,43 @@ defmodule QuantumBillingWeb.EWayBillsLive do
     "Move e-way bill #{number} to the Bin? It can be restored from there."
   end
 
+  defp extend_error(:gone), do: "That e-way bill no longer exists."
+  defp extend_error(:already_cancelled), do: "A cancelled e-way bill cannot be extended."
+
+  defp extend_error(:replaced),
+    do: "A newer e-way bill has replaced this one, so it can no longer be extended."
+
+  defp extend_error(:outside_extension_window) do
+    hours = Validity.extension_window_hours()
+
+    "Rule 138(10) allows an extension only from #{hours} hours before to #{hours} hours " <>
+      "after the bill expires."
+  end
+
+  defp extend_error(%Ecto.Changeset{} = changeset), do: changeset_error(changeset)
+
+  defp extend_error(reason) do
+    NICClient.error_message(reason) ||
+      "The extension failed: #{QuantumBilling.ErrorMessages.text(reason)}"
+  end
+
+  # The first field error, in words: "Remaining distance (km) must be greater than 0".
+  defp changeset_error(changeset) do
+    case Ecto.Changeset.traverse_errors(changeset, &interpolate/1) |> Enum.sort() do
+      [{field, [message | _]} | _] -> "#{Phoenix.Naming.humanize(field)} #{message}."
+      [] -> "Please check the details and try again."
+    end
+  end
+
+  defp interpolate({message, opts}) do
+    Enum.reduce(opts, message, fn {key, value}, acc ->
+      String.replace(acc, "%{#{key}}", fn _ -> to_string(value) end)
+    end)
+  end
+
+  defp format_ist(%NaiveDateTime{} = valid_until),
+    do: valid_until |> Validity.to_ist() |> Calendar.strftime("%d/%m/%Y %I:%M %p")
+
   defp cancel_error(:gone), do: "That e-way bill no longer exists."
   defp cancel_error(:already_cancelled), do: "That e-way bill is already cancelled."
 
@@ -209,7 +267,7 @@ defmodule QuantumBillingWeb.EWayBillsLive do
   defp part_b_error(:expired),
     do: "This e-way bill has expired. The vehicle can only be updated while it is valid."
 
-  defp part_b_error(%Ecto.Changeset{}), do: "Enter the new vehicle number."
+  defp part_b_error(%Ecto.Changeset{} = changeset), do: changeset_error(changeset)
 
   defp part_b_error(reason) do
     NICClient.error_message(reason) ||
@@ -411,6 +469,19 @@ defmodule QuantumBillingWeb.EWayBillsLive do
                       <.icon name="hero-arrow-down-tray" class="size-4" />
                     </.link>
 
+                    <%!-- Rule 138(10): from 8 hours before to 8 hours after expiry. --%>
+                    <button
+                      :if={row.extendable}
+                      type="button"
+                      phx-click="open_action"
+                      phx-value-action="extend"
+                      phx-value-id={row.id}
+                      class={row_action_class()}
+                      aria-label={"Extend validity of e-way bill #{row.ewb_no}"}
+                    >
+                      <.icon name="hero-clock" class="size-4" />
+                    </button>
+
                     <%!-- Not offered once cancelled or expired: the portal refuses both. --%>
                     <button
                       :if={row.status == "Active"}
@@ -497,7 +568,8 @@ defmodule QuantumBillingWeb.EWayBillsLive do
       <.action_modal :if={@action == :part_b} bill={@action_bill} title="Update Vehicle">
         <form id="ewb-part-b-form" phx-submit="update_part_b" class="space-y-3">
           <p class="text-xs text-base-content/70">
-            Vehicle details are a record of every vehicle that carried the consignment, not a field that is
+            Road needs the vehicle number; Rail, Air and Ship need the railway receipt, airway
+            bill or bill of lading number and date. Vehicle details are a record of every vehicle that carried the consignment, not a field that is
             overwritten. The new leg is added to the bill's history and the EWB-01 prints all of
             them.
           </p>
@@ -510,11 +582,12 @@ defmodule QuantumBillingWeb.EWayBillsLive do
               id="ewb-part-b-vehicle"
               type="text"
               name="vehicle_number"
-              placeholder="e.g. MH12AB1234"
+              placeholder="e.g. MH12AB1234 (required for Road)"
               class="input input-bordered w-full text-xs uppercase"
-              required
             />
           </div>
+
+          <.transport_document_inputs id="ewb-part-b" />
 
           <div>
             <label for="ewb-part-b-mode" class="block text-xs font-semibold mb-1">
@@ -571,7 +644,219 @@ defmodule QuantumBillingWeb.EWayBillsLive do
           </div>
         </form>
       </.action_modal>
+
+      <.action_modal :if={@action == :extend} bill={@action_bill} title="Extend Validity">
+        <form id="ewb-extend-form" phx-submit="extend_validity" class="space-y-3">
+          <p class="text-xs text-base-content/70">
+            Rule 138(10): a bill can be extended from {Validity.extension_window_hours()} hours
+            before to {Validity.extension_window_hours()} hours after it expires, when the goods
+            have not reached their destination. Valid until {format_ist(@action_bill.valid_until)} IST.
+          </p>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="ewb-extend-reason" class="block text-xs font-semibold mb-1">Reason</label>
+              <select
+                id="ewb-extend-reason"
+                name="reason"
+                class="select select-bordered w-full text-xs"
+              >
+                <option :for={reason <- NICClient.extension_reasons()} value={reason}>
+                  {reason}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label for="ewb-extend-distance" class="block text-xs font-semibold mb-1">
+                Remaining distance (km)
+              </label>
+              <input
+                id="ewb-extend-distance"
+                type="number"
+                min="1"
+                max="4000"
+                name="remaining_distance_km"
+                class="input input-bordered w-full text-xs"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label for="ewb-extend-remarks" class="block text-xs font-semibold mb-1">Remarks</label>
+            <input
+              id="ewb-extend-remarks"
+              type="text"
+              name="remarks"
+              maxlength="50"
+              class="input input-bordered w-full text-xs"
+              required
+            />
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label for="ewb-extend-place" class="block text-xs font-semibold mb-1">
+                Current place
+              </label>
+              <input
+                id="ewb-extend-place"
+                type="text"
+                name="from_place"
+                class="input input-bordered w-full text-xs"
+                required
+              />
+            </div>
+            <div>
+              <label for="ewb-extend-state" class="block text-xs font-semibold mb-1">State</label>
+              <select
+                id="ewb-extend-state"
+                name="from_state"
+                class="select select-bordered w-full text-xs"
+              >
+                <option :for={state <- EWayBillForm.states()} value={state}>{state}</option>
+              </select>
+            </div>
+            <div>
+              <label for="ewb-extend-pincode" class="block text-xs font-semibold mb-1">PIN code</label>
+              <input
+                id="ewb-extend-pincode"
+                type="text"
+                inputmode="numeric"
+                name="from_pincode"
+                maxlength="6"
+                class="input input-bordered w-full text-xs"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label for="ewb-extend-status" class="block text-xs font-semibold mb-1">
+              Consignment
+            </label>
+            <select
+              id="ewb-extend-status"
+              name="consignment_status"
+              class="select select-bordered w-full text-xs"
+            >
+              <option value="In Movement">In movement (on a vehicle or with a carrier)</option>
+              <option value="In Transit">In transit (waiting at a place)</option>
+            </select>
+          </div>
+
+          <fieldset class="space-y-3 rounded-lg border border-base-200 p-3">
+            <legend class="px-1 text-xs font-semibold">If in movement</legend>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label for="ewb-extend-mode" class="block text-xs font-semibold mb-1">
+                  Mode of transport
+                </label>
+                <select
+                  id="ewb-extend-mode"
+                  name="mode_of_transport"
+                  class="select select-bordered w-full text-xs"
+                >
+                  <option
+                    :for={mode <- EWayBill.transport_modes()}
+                    value={mode}
+                    selected={mode == @action_bill.mode_of_transport}
+                  >
+                    {mode}
+                  </option>
+                </select>
+              </div>
+              <div>
+                <label for="ewb-extend-vehicle" class="block text-xs font-semibold mb-1">
+                  Vehicle number
+                </label>
+                <input
+                  id="ewb-extend-vehicle"
+                  type="text"
+                  name="vehicle_number"
+                  value={@action_bill.vehicle_number}
+                  class="input input-bordered w-full text-xs uppercase"
+                />
+              </div>
+            </div>
+            <.transport_document_inputs id="ewb-extend" />
+          </fieldset>
+
+          <fieldset class="space-y-3 rounded-lg border border-base-200 p-3">
+            <legend class="px-1 text-xs font-semibold">If in transit</legend>
+            <div class="grid grid-cols-3 gap-3">
+              <div>
+                <label for="ewb-extend-transit" class="block text-xs font-semibold mb-1">Where</label>
+                <select
+                  id="ewb-extend-transit"
+                  name="transit_type"
+                  class="select select-bordered w-full text-xs"
+                >
+                  <option :for={type <- EWayBillExtension.transit_types()} value={type}>
+                    {type}
+                  </option>
+                </select>
+              </div>
+              <div class="col-span-2">
+                <label for="ewb-extend-address" class="block text-xs font-semibold mb-1">
+                  Address
+                </label>
+                <input
+                  id="ewb-extend-address"
+                  type="text"
+                  name="address"
+                  maxlength="120"
+                  class="input input-bordered w-full text-xs"
+                />
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="flex justify-end gap-2 border-t border-base-200 pt-3">
+            <button type="button" phx-click="close_action" class={secondary_button_class()}>
+              Close
+            </button>
+            <button type="submit" phx-disable-with="Extending…" class={action_button_class()}>
+              Extend Validity
+            </button>
+          </div>
+        </form>
+      </.action_modal>
     </Layouts.app>
+    """
+  end
+
+  attr :id, :string, required: true
+
+  # Railway receipt, airway bill or bill of lading: required for Rail, Air and Ship.
+  defp transport_document_inputs(assigns) do
+    ~H"""
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label for={"#{@id}-document-number"} class="block text-xs font-semibold mb-1">
+          Transport document no.
+        </label>
+        <input
+          id={"#{@id}-document-number"}
+          type="text"
+          name="transport_document_number"
+          maxlength="15"
+          placeholder="RR / AWB / BOL number"
+          class="input input-bordered w-full text-xs"
+        />
+      </div>
+      <div>
+        <label for={"#{@id}-document-date"} class="block text-xs font-semibold mb-1">
+          Transport document date
+        </label>
+        <input
+          id={"#{@id}-document-date"}
+          type="date"
+          name="transport_document_date"
+          class="input input-bordered w-full text-xs"
+        />
+      </div>
+    </div>
     """
   end
 

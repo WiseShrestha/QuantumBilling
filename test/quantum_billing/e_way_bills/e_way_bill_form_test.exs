@@ -61,13 +61,19 @@ defmodule QuantumBilling.EWayBills.EWayBillFormTest do
             :to_state,
             :total_goods_value,
             :transport_mode,
-            :vehicle_no,
             :from_place,
             :to_place,
             :distance_km
           ] do
         assert ["can't be blank"] = errors[field], "expected #{field} to be required"
       end
+    end
+
+    # The vehicle depends on the mode; see "transport mode" below.
+    test "leaves the vehicle to the transport mode" do
+      errors = errors_on(EWayBillForm.changeset(%EWayBillForm{}, %{}))
+
+      refute Map.has_key?(errors, :vehicle_no)
     end
 
     test "leaves the optional fields alone" do
@@ -183,6 +189,50 @@ defmodule QuantumBilling.EWayBills.EWayBillFormTest do
       form = %EWayBillForm{total_goods_value: 100, cgst_value: 9, sgst_value: 9}
 
       assert EWayBillForm.total_invoice_value(form) == 118
+    end
+  end
+
+  describe "transport mode" do
+    test "Road needs a vehicle in the MH01AB1234 format, and no transport document" do
+      no_vehicle = EWayBillForm.changeset(%EWayBillForm{}, valid_attrs(%{"vehicle_no" => ""}))
+      assert ["is required when the goods go by road"] = errors_on(no_vehicle).vehicle_no
+
+      bad_vehicle =
+        EWayBillForm.changeset(%EWayBillForm{}, valid_attrs(%{"vehicle_no" => "TRAIN42"}))
+
+      assert ["must look like MH01AB1234"] = errors_on(bad_vehicle).vehicle_no
+
+      assert EWayBillForm.changeset(%EWayBillForm{}, valid_attrs()).valid?
+    end
+
+    for mode <- ["Rail", "Air", "Ship"] do
+      test "#{mode} needs the transport document number and date, not a vehicle" do
+        mode = unquote(mode)
+
+        missing =
+          EWayBillForm.changeset(
+            %EWayBillForm{},
+            valid_attrs(%{"transport_mode" => mode, "vehicle_no" => ""})
+          )
+
+        errors = errors_on(missing)
+        assert errors.transport_document_number == ["is required for #{mode}"]
+        assert errors.transport_document_date == ["is required for #{mode}"]
+        refute Map.has_key?(errors, :vehicle_no)
+
+        filled =
+          EWayBillForm.changeset(
+            %EWayBillForm{},
+            valid_attrs(%{
+              "transport_mode" => mode,
+              "vehicle_no" => "",
+              "transport_document_number" => "RR123456",
+              "transport_document_date" => "2024-05-28"
+            })
+          )
+
+        assert filled.valid?
+      end
     end
   end
 end
