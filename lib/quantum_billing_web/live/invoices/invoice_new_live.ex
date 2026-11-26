@@ -31,6 +31,7 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
   alias QuantumBilling.TaxRates
   alias QuantumBilling.Templates
   alias QuantumBillingWeb.DocumentForm
+  alias QuantumBillingWeb.HsnSuggestions
 
   # Serves both new and edit.
   def mount(params, _session, socket) do
@@ -129,6 +130,7 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
     socket
     |> assign(:vat?, vat?)
     |> assign(:tax_rates, if(vat?, do: TaxRates.list_rates(archived: :include), else: []))
+    |> HsnSuggestions.init(vat?)
   end
 
   # The company goes in as trusted, so the live preview splits the tax correctly;
@@ -198,15 +200,28 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
 
     params = params |> DocumentForm.pan_from_gstin() |> apply_payment_term()
 
-    %{invoice: invoice, organization: organization} = socket.assigns
-
-    changeset =
-      invoice
-      |> Invoices.change_invoice(params, preview_trusted(organization, invoice))
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign_form(socket, changeset)}
+    {:noreply,
+     socket
+     |> preview(params)
+     |> HsnSuggestions.on_change(
+       "invoice",
+       Map.put(params, "hsn_lookup", event["hsn_lookup"]),
+       event["_target"]
+     )}
   end
+
+  # HSN/SAC suggestions on the item rows (GST only).
+  def handle_event("pick_hsn", %{"index" => index, "code" => code, "rate" => rate}, socket) do
+    params = HsnSuggestions.pick_params(socket.assigns.form.params, index, code, rate)
+
+    {:noreply, socket |> preview(params) |> HsnSuggestions.picked(index, code, rate)}
+  end
+
+  def handle_event("hsn_lookup_open", %{"index" => index}, socket),
+    do: {:noreply, HsnSuggestions.open_lookup(socket, index)}
+
+  def handle_event("close_hsn", _params, socket),
+    do: {:noreply, HsnSuggestions.close_all(socket)}
 
   # Save Draft and Preview are the same write.
   def handle_event("save", %{"invoice" => params}, socket) do
@@ -254,6 +269,21 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
     do: "Invoice #{invoice.invoice_number} saved as a draft."
 
   defp saved_message(_existing, invoice), do: "Invoice #{invoice.invoice_number} updated."
+
+  def handle_info({:clear_hsn_notice, index}, socket),
+    do: {:noreply, HsnSuggestions.clear_notice(socket, index)}
+
+  # The form as typed, validated for the live summary; nothing is saved.
+  defp preview(socket, params) do
+    %{invoice: invoice, organization: organization} = socket.assigns
+
+    changeset =
+      invoice
+      |> Invoices.change_invoice(params, preview_trusted(organization, invoice))
+      |> Map.put(:action, :validate)
+
+    assign_form(socket, changeset)
+  end
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
     invoice = Ecto.Changeset.apply_changes(changeset)
@@ -441,6 +471,7 @@ defmodule QuantumBillingWeb.InvoiceNewLive do
           <.items_section
             form={f}
             vat?={@vat?}
+            hsn={@hsn}
             tax_rates={@tax_rates}
             currency={@currency}
             summary={@summary}

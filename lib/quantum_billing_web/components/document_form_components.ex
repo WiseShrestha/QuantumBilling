@@ -188,6 +188,10 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
   attr :summary, :map, required: true, doc: "the applied changeset, for line figures"
   attr :item_definitions, :list, default: []
 
+  attr :hsn, :map,
+    default: nil,
+    doc: "HSN/SAC suggestion state (`QuantumBillingWeb.HsnSuggestions`); nil turns them off"
+
   @doc "Card: the lines, with add, remove and a live amount per line."
   def items_section(assigns) do
     ~H"""
@@ -227,7 +231,7 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
           </thead>
 
           <%!-- inputs_for keeps stored row ids (no duplicate rows on edit); skip_hidden because an input is invalid directly in tbody. --%>
-          <tbody id={"#{@form.name}-items"}>
+          <tbody id={"#{@form.name}-items"} phx-hook={@hsn && ".HsnSuggest"}>
             <.inputs_for :let={item_f} field={@form[:items]} skip_hidden>
               <tr
                 id={"#{@form.name}-item-#{item_f.index}"}
@@ -253,6 +257,8 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
                     value={item_f[:description].value}
                     placeholder="Item or service"
                     required
+                    phx-debounce={@hsn && "300"}
+                    autocomplete={@hsn && "off"}
                     class={form_input_class()}
                   />
                 </td>
@@ -263,9 +269,13 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
                     id={item_f[:hsn_sac].id}
                     name={item_f[:hsn_sac].name}
                     value={item_f[:hsn_sac].value}
-                    placeholder={if !@vat?, do: "998313"}
+                    placeholder={if @vat?, do: nil, else: "e.g. 9401"}
+                    phx-debounce={@hsn && "300"}
+                    autocomplete={@hsn && "off"}
+                    aria-describedby={@hsn && "#{@form.name}-hsn-note-#{item_f.index}"}
                     class={form_input_class()}
                   />
+                  <.hsn_assist :if={@hsn} hsn={@hsn} form={@form} index={to_string(item_f.index)} />
                 </td>
 
                 <td class="py-2 pr-2 align-top">
@@ -370,6 +380,31 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
                       class="hidden"
                     /> <.icon name="hero-trash" class="size-4" />
                   </label>
+                </td>
+              </tr>
+              <%!-- A row of its own, full width: inside the HSN cell the list would be
+                   clipped by the table's horizontal scroll. --%>
+              <tr
+                :if={@hsn && hsn_row?(@hsn, to_string(item_f.index))}
+                id={"#{@form.name}-hsn-row-#{item_f.index}"}
+              >
+                <td colspan="9" class="pb-3">
+                  <p
+                    :if={notice_for(@hsn.notice, to_string(item_f.index))}
+                    aria-hidden="true"
+                    class="ml-12 rounded-field bg-warning/10 px-2 py-1 text-xs text-base-content/70"
+                  >
+                    <.icon name="hero-light-bulb" class="mr-1 size-3.5 align-text-bottom" />{notice_for(
+                      @hsn.notice,
+                      to_string(item_f.index)
+                    )}
+                  </p>
+                  <.hsn_panel
+                    :if={hsn_panel_open?(@hsn, to_string(item_f.index))}
+                    hsn={@hsn}
+                    form={@form}
+                    index={to_string(item_f.index)}
+                  />
                 </td>
               </tr>
               <tr
@@ -567,6 +602,208 @@ defmodule QuantumBillingWeb.DocumentFormComponents do
     </div>
     """
   end
+
+  attr :hsn, :map, required: true
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :index, :string, required: true
+
+  # Under the HSN/SAC box: the "Suggested" tag, the "please verify" note,
+  # and the suggestions or the "Find HSN/SAC" search for this row.
+  defp hsn_assist(assigns) do
+    assigns =
+      assigns
+      |> assign(:suggested?, MapSet.member?(assigns.hsn.suggested, assigns.index))
+      |> assign(:notice, notice_for(assigns.hsn.notice, assigns.index))
+
+    ~H"""
+    <span
+      :if={@suggested?}
+      id={"#{@form.name}-hsn-suggested-#{@index}"}
+      class="mt-1 inline-flex rounded-full border border-warning/50 bg-warning/15 px-1.5 py-0.5 text-2xs font-semibold text-base-content/80"
+    >
+      Suggested
+    </span>
+
+    <%!-- Always present, so screen readers announce the note when it fills.
+         It is shown, full width, in the row below (`hsn_panel`). --%>
+    <p id={"#{@form.name}-hsn-note-#{@index}"} aria-live="polite" class="sr-only">
+      {@notice}
+    </p>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".HsnSuggest">
+      // Arrow keys move through a row's HSN/SAC suggestions; Enter picks
+      // (the options are buttons); Escape closes them.
+      export default {
+        mounted() {
+          this.el.addEventListener("keydown", (event) => {
+            const options = [...this.el.querySelectorAll("[data-hsn-option]")]
+            const panel = this.el.querySelector("[data-hsn-panel]")
+
+            if (event.key === "Escape" && panel) {
+              event.preventDefault()
+              this.pushEvent("close_hsn", {})
+              return
+            }
+
+            if (options.length === 0) return
+            const at = options.indexOf(document.activeElement)
+
+            if (event.key === "ArrowDown") {
+              event.preventDefault()
+              options[(at + 1) % options.length].focus()
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault()
+              options[(at - 1 + options.length) % options.length].focus()
+            }
+          })
+        }
+      }
+    </script>
+    """
+  end
+
+  attr :hsn, :map, required: true
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :index, :string, required: true
+
+  # The suggestions for a row, or its "Find HSN/SAC" search.
+  defp hsn_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:manual?, MapSet.member?(assigns.hsn.manual, assigns.index))
+      |> assign(:lookup?, assigns.hsn.lookup == assigns.index)
+
+    ~H"""
+    <div
+      id={"#{@form.name}-hsn-panel-#{@index}"}
+      data-hsn-panel
+      class="ml-12 max-w-xl rounded-box border border-base-300 bg-base-100 p-2 shadow-sm"
+    >
+      <%= if @lookup? do %>
+        <label for={"#{@form.name}-hsn-lookup-#{@index}"} class="sr-only">
+          Search HSN/SAC by item or code
+        </label>
+        <input
+          type="search"
+          id={"#{@form.name}-hsn-lookup-#{@index}"}
+          name="hsn_lookup"
+          value={@hsn.query}
+          placeholder="Search by item or code"
+          phx-debounce="300"
+          phx-mounted={Phoenix.LiveView.JS.focus()}
+          autocomplete="off"
+          class={form_input_class()}
+        />
+        <.hsn_options
+          options={QuantumBillingWeb.HsnSuggestions.lookup_results(@hsn)}
+          form={@form}
+          index={@index}
+          manual?={@manual?}
+        />
+        <p
+          :if={
+            String.trim(@hsn.query) != "" and
+              QuantumBillingWeb.HsnSuggestions.lookup_results(@hsn) == []
+          }
+          class="px-1 py-2 text-xs text-base-content/60"
+        >
+          Nothing in the built-in list matches. The list covers common items only.
+        </p>
+      <% else %>
+        <p class="px-1 pb-1 text-2xs font-semibold uppercase tracking-wider text-base-content/45">
+          {if @hsn.from == :code, do: "Matching codes", else: "Suggested HSN/SAC"}
+        </p>
+        <.hsn_options options={@hsn.list} form={@form} index={@index} manual?={@manual?} />
+        <p :if={@hsn.list == []} class="px-1 py-2 text-xs text-base-content/60">
+          No match. Nothing has been filled in.
+        </p>
+      <% end %>
+
+      <div class="mt-1 flex items-center justify-between border-t border-base-200 px-1 pt-2 text-xs">
+        <button
+          :if={!@lookup?}
+          type="button"
+          id={"#{@form.name}-hsn-find-#{@index}"}
+          phx-click="hsn_lookup_open"
+          phx-value-index={@index}
+          class="font-semibold text-primary hover:underline"
+        >
+          Find HSN/SAC
+        </button>
+        <.link
+          :if={@lookup?}
+          href={~p"/hsn-finder"}
+          target="_blank"
+          rel="noopener"
+          class="font-semibold text-primary hover:underline"
+        >
+          Open the HSN finder
+        </.link>
+        <button
+          type="button"
+          phx-click="close_hsn"
+          class="text-base-content/60 hover:text-base-content"
+        >
+          Close <span class="sr-only">suggestions</span>
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  defp hsn_panel_open?(hsn, index), do: hsn.open == index or hsn.lookup == index
+
+  defp hsn_row?(hsn, index),
+    do: hsn_panel_open?(hsn, index) or notice_for(hsn.notice, index) != nil
+
+  attr :options, :list, required: true
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :index, :string, required: true
+  attr :manual?, :boolean, required: true
+
+  defp hsn_options(assigns) do
+    ~H"""
+    <ul
+      :if={@options != []}
+      role="listbox"
+      aria-label="HSN/SAC suggestions"
+      class="max-h-64 overflow-y-auto"
+    >
+      <li :for={option <- @options} role="presentation">
+        <button
+          type="button"
+          role="option"
+          aria-selected="false"
+          data-hsn-option
+          phx-click="pick_hsn"
+          phx-value-index={@index}
+          phx-value-code={option.code}
+          phx-value-rate={option.rate}
+          data-confirm={
+            @manual? &&
+              "Replace the HSN/SAC and GST rate you entered on this line with #{type_label(option)} #{option.code} at #{option.rate}%?"
+          }
+          class="flex w-full flex-col gap-0.5 rounded-field px-2 py-1.5 text-left hover:bg-base-200 focus:bg-base-200 focus:outline-none"
+        >
+          <span class="flex items-center gap-2 text-xs">
+            <span class="font-semibold tabular-nums">{option.code}</span>
+            <span class="rounded bg-base-200 px-1 text-2xs font-semibold">{type_label(option)}</span>
+            <span class="tabular-nums">{option.rate}%</span>
+            <span class="ml-auto text-2xs text-base-content/45">
+              {if option.source == :history, do: "Used before", else: "HSN finder"}
+            </span>
+          </span>
+          <span class="line-clamp-2 text-2xs text-base-content/60">{option.description}</span>
+        </button>
+      </li>
+    </ul>
+    """
+  end
+
+  defp type_label(%{type: type}), do: type |> to_string() |> String.upcase()
+
+  defp notice_for({index, text}, index), do: text
+  defp notice_for(_notice, _index), do: nil
 
   attr :prefix, :string, required: true
   attr :item, Ecto.Changeset, required: true

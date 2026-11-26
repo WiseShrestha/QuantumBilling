@@ -356,4 +356,167 @@ defmodule QuantumBilling.HsnFinder do
 
   @doc "The date the current rate structure took effect."
   def gst_2_0_date, do: @gst_2_0_date
+
+  # Words too common to say anything about the goods or service.
+  @stop_words ~w(and the for with from per of to in on a an by or our your new
+                 item items service services charges charge fee fees)
+
+  # The most suggestions a line shows.
+  @suggestion_limit 5
+
+  @doc """
+  HSN/SAC suggestions for a line's description, best first, at most
+  #{@suggestion_limit}: `%{code, description, rate, source}`, where `source`
+  is `:history` (this business has billed a line like it before, with that
+  code and rate) or `:catalogue` (this module's list).
+
+  Words are matched one by one, so "Laptop repair" finds both laptops and
+  repairs. The business's own history comes first: it is what the business
+  has actually billed. A code appears once, under its best source. A
+  description with no usable word suggests nothing.
+
+  `opts` takes `:limit` and `:history` (false skips the database, for a
+  business without one selected).
+  """
+  def suggest(description, opts \\ [])
+
+  def suggest(description, opts) when is_binary(description) do
+    words = words(description)
+    limit = Keyword.get(opts, :limit, @suggestion_limit)
+
+    if words == [] do
+      []
+    else
+      history = if Keyword.get(opts, :history, true), do: history(words), else: []
+
+      (history ++ catalogue(words))
+      |> Enum.uniq_by(& &1.code)
+      |> Enum.take(limit)
+    end
+  end
+
+  def suggest(_description, _opts), do: []
+
+  defp words(text) do
+    text
+    |> String.downcase()
+    |> String.split(~r/[^\p{L}\p{N}]+/u, trim: true)
+    |> Enum.filter(&(String.length(&1) >= 3 and &1 not in @stop_words))
+    |> Enum.uniq()
+  end
+
+  # Entries whose description or keywords share a word, most shared first.
+  defp catalogue(words) do
+    entries()
+    |> Enum.map(fn entry ->
+      vocabulary = words(entry.description) ++ entry.keywords
+      {entry, Enum.count(words, &matches?(&1, vocabulary))}
+    end)
+    |> Enum.filter(fn {_entry, score} -> score > 0 end)
+    |> Enum.sort_by(fn {entry, score} -> {-score, entry.code} end)
+    |> Enum.map(fn {entry, _score} -> from_entry(entry) end)
+  end
+
+  defp from_entry(entry) do
+    %{
+      code: entry.code,
+      type: entry.type,
+      description: entry.description,
+      rate: entry.rate,
+      source: :catalogue
+    }
+  end
+
+  @doc """
+  Suggestions for a code being typed: catalogue entries under that prefix
+  ("94" finds 9401, 9403...), best first, at most #{@suggestion_limit}.
+  """
+  def suggest_code(digits, opts \\ []) when is_binary(digits) do
+    digits
+    |> search_by_code()
+    |> Enum.sort_by(& &1.code)
+    |> Enum.take(Keyword.get(opts, :limit, @suggestion_limit))
+    |> Enum.map(&from_entry/1)
+  end
+
+  @doc "HSN (goods) or SAC (services): a SAC starts with 99."
+  def code_type("99" <> _rest), do: :sac
+  def code_type(_code), do: :hsn
+
+  # The same word, or its plural: "chairs" finds "chair", "desk" does not
+  # find "desktop".
+  defp matches?(word, vocabulary), do: Enum.any?(vocabulary, &(singular(&1) == singular(word)))
+
+  defp singular(word) do
+    cond do
+      String.ends_with?(word, "ies") and String.length(word) > 4 ->
+        String.slice(word, 0..-4//1) <> "y"
+
+      String.ends_with?(word, ["ches", "shes", "sses", "xes"]) ->
+        String.slice(word, 0..-3//1)
+
+      String.ends_with?(word, "s") and not String.ends_with?(word, "ss") ->
+        String.slice(word, 0..-2//1)
+
+      true ->
+        word
+    end
+  end
+
+  # This business's own lines (invoices and quotations not in the Bin) that
+  # share a word with the description and carry an HSN/SAC: grouped by code
+  # and rate, most shared words first, then most used.
+  defp history(words) do
+    import Ecto.Query, only: [from: 2]
+
+    patterns = Enum.map(words, &("%" <> escape_like(&1) <> "%"))
+
+    invoice_lines =
+      from i in QuantumBilling.Invoices.InvoiceItem,
+        join: d in ^QuantumBilling.Invoices.Invoice.kept(),
+        on: d.id == i.invoice_id,
+        where: d.tax_regime == "gst",
+        where: not is_nil(i.hsn_sac) and i.hsn_sac != "",
+        where: fragment("lower(?) LIKE ANY(?)", i.description, ^patterns),
+        order_by: [desc: i.id],
+        limit: 200,
+        select: %{description: i.description, code: i.hsn_sac, rate: i.tax_rate}
+
+    quotation_lines =
+      from i in QuantumBilling.Quotations.QuotationItem,
+        join: d in ^QuantumBilling.Quotations.Quotation.kept(),
+        on: d.id == i.quotation_id,
+        where: d.tax_regime == "gst",
+        where: not is_nil(i.hsn_sac) and i.hsn_sac != "",
+        where: fragment("lower(?) LIKE ANY(?)", i.description, ^patterns),
+        order_by: [desc: i.id],
+        limit: 200,
+        select: %{description: i.description, code: i.hsn_sac, rate: i.tax_rate}
+
+    (QuantumBilling.Repo.all(invoice_lines) ++ QuantumBilling.Repo.all(quotation_lines))
+    |> Enum.group_by(&{String.trim(&1.code), &1.rate})
+    |> Enum.map(fn {{code, rate}, lines} ->
+      best =
+        Enum.max_by(
+          lines,
+          &Enum.count(words, fn word -> matches?(word, words(&1.description)) end)
+        )
+
+      score = Enum.count(words, &matches?(&1, words(best.description)))
+
+      suggestion = %{
+        code: code,
+        type: code_type(code),
+        description: best.description,
+        rate: rate,
+        source: :history
+      }
+
+      {suggestion, score, length(lines)}
+    end)
+    |> Enum.sort_by(fn {suggestion, score, uses} -> {-score, -uses, suggestion.code} end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp escape_like(word), do: String.replace(word, ~r/[\\%_]/, "\\\\\\0")
 end

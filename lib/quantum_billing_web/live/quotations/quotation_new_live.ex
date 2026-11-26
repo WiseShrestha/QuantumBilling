@@ -24,6 +24,7 @@ defmodule QuantumBillingWeb.QuotationNewLive do
   alias QuantumBilling.TaxRates
   alias QuantumBilling.Templates
   alias QuantumBillingWeb.DocumentForm
+  alias QuantumBillingWeb.HsnSuggestions
 
   def mount(params, _session, socket) do
     organization = Settings.get_organization()
@@ -110,6 +111,7 @@ defmodule QuantumBillingWeb.QuotationNewLive do
     socket
     |> assign(:vat?, vat?)
     |> assign(:tax_rates, if(vat?, do: TaxRates.list_rates(archived: :include), else: []))
+    |> HsnSuggestions.init(vat?)
   end
 
   def handle_event("search_clients", %{"value" => search}, socket) do
@@ -123,15 +125,29 @@ defmodule QuantumBillingWeb.QuotationNewLive do
       |> DocumentForm.apply_client_choice(socket)
 
     params = DocumentForm.pan_from_gstin(params)
-    %{quotation: quotation, organization: organization} = socket.assigns
 
-    changeset =
-      quotation
-      |> Quotations.change_quotation(params, Quotations.preview_trusted(organization, quotation))
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign_form(socket, changeset)}
+    {:noreply,
+     socket
+     |> preview(params)
+     |> HsnSuggestions.on_change(
+       "quotation",
+       Map.put(params, "hsn_lookup", event["hsn_lookup"]),
+       event["_target"]
+     )}
   end
+
+  # HSN/SAC suggestions on the item rows (GST only).
+  def handle_event("pick_hsn", %{"index" => index, "code" => code, "rate" => rate}, socket) do
+    params = HsnSuggestions.pick_params(socket.assigns.form.params, index, code, rate)
+
+    {:noreply, socket |> preview(params) |> HsnSuggestions.picked(index, code, rate)}
+  end
+
+  def handle_event("hsn_lookup_open", %{"index" => index}, socket),
+    do: {:noreply, HsnSuggestions.open_lookup(socket, index)}
+
+  def handle_event("close_hsn", _params, socket),
+    do: {:noreply, HsnSuggestions.close_all(socket)}
 
   def handle_event("save", %{"quotation" => params}, socket) do
     {params, _socket} = DocumentForm.apply_client_choice(params, socket)
@@ -170,6 +186,21 @@ defmodule QuantumBillingWeb.QuotationNewLive do
 
   defp saved_message(%Quotation{id: nil}, quotation), do: "Quotation #{quotation.number} saved."
   defp saved_message(_existing, quotation), do: "Quotation #{quotation.number} updated."
+
+  def handle_info({:clear_hsn_notice, index}, socket),
+    do: {:noreply, HsnSuggestions.clear_notice(socket, index)}
+
+  # The form as typed, validated for the live summary; nothing is saved.
+  defp preview(socket, params) do
+    %{quotation: quotation, organization: organization} = socket.assigns
+
+    changeset =
+      quotation
+      |> Quotations.change_quotation(params, Quotations.preview_trusted(organization, quotation))
+      |> Map.put(:action, :validate)
+
+    assign_form(socket, changeset)
+  end
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
     socket
@@ -310,6 +341,7 @@ defmodule QuantumBillingWeb.QuotationNewLive do
           <.items_section
             form={f}
             vat?={@vat?}
+            hsn={@hsn}
             tax_rates={@tax_rates}
             currency={@currency}
             summary={@summary}
