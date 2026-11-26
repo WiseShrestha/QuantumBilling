@@ -423,9 +423,22 @@ defmodule QuantumBillingWeb.InvoiceDoc.Renderer do
         </span>
       </div>
 
-      <p :if={Tax.reverse_charge_legend(@invoice)} class="qb-doc__muted qb-doc__legend">
+      <p
+        :if={Tax.reverse_charge_legend(@invoice)}
+        id="reverse-charge-legend"
+        class="qb-doc__muted qb-doc__legend"
+      >
         {Tax.reverse_charge_legend(@invoice)}
       </p>
+      <%!-- Rule 46(p): the rate and amount of the tax the recipient pays. --%>
+      <div
+        :for={head <- Tax.reverse_charge_heads(@invoice)}
+        class="qb-doc__total-line qb-doc__muted"
+        data-reverse-charge-head
+      >
+        <span>{head.label} (payable by recipient)</span>
+        <span>{Format.money(head.amount, @invoice.currency, decimals: 2, space: true)}</span>
+      </div>
     </div>
     """
   end

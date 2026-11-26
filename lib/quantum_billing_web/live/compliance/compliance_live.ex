@@ -423,11 +423,10 @@ defmodule QuantumBillingWeb.ComplianceLive do
         />
       </div>
 
-      <%!-- flex-1 so the two columns run to the bottom of the page instead of
-           stopping short of it; the calendar card takes up the slack on the right. --%>
-      <div class="mt-3 grid grid-cols-1 gap-3 lg:flex-1 lg:grid-cols-3">
+      <%!-- Grid items-start so short task lists end right after the rows without a large blank area. --%>
+      <div class="mt-3 grid grid-cols-1 items-start gap-3 lg:grid-cols-3">
         <.card class="flex flex-col lg:col-span-2">
-          <div class="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 class="text-sm font-semibold tracking-tight">Compliance Tasks</h2>
 
             <div class="dropdown dropdown-end">
@@ -492,187 +491,191 @@ defmodule QuantumBillingWeb.ComplianceLive do
                 else: "Try another category or status."
             }
           />
-          <%!-- Scrolls inside an absolutely positioned flex-1 shell, so the rows fill the card's leftover height without growing it. --%>
-          <div :if={@rows != []} class="relative min-h-[26rem] flex-1">
-            <div class="absolute inset-0 overflow-y-auto overflow-x-auto">
-              <table class="w-full">
-                <thead class="sticky top-0 z-10 bg-base-100">
-                  <tr class={[
-                    table_head_class(),
-                    "[&>th]:sticky [&>th]:top-0 [&>th]:bg-base-100",
-                    "[&>th]:border-b [&>th]:border-base-300"
-                  ]}>
-                    <th class="pr-4 text-left">Compliance Type</th>
+          <%!-- Table wrapper with max height scroll rather than forcing a 26rem empty min-height --%>
+          <div :if={@rows != []} class="mt-4 max-h-[32rem] overflow-y-auto overflow-x-auto">
+            <table class="w-full">
+              <thead class="sticky top-0 z-10 bg-base-100">
+                <tr class={[
+                  table_head_class(),
+                  "[&>th]:sticky [&>th]:top-0 [&>th]:bg-base-100",
+                  "[&>th]:border-b [&>th]:border-base-300"
+                ]}>
+                  <th class="w-2/5 min-w-[14rem] pr-4 text-left">Compliance Type</th>
 
-                    <th class="pr-4 text-left">Period</th>
+                  <th class="w-[8rem] whitespace-nowrap pr-4 text-left">Period</th>
 
-                    <th class="pr-4 text-left">Due Date</th>
+                  <th class="w-[8rem] whitespace-nowrap pr-4 text-left">Due Date</th>
 
-                    <th class="pr-4 text-left">Status</th>
+                  <th class="w-[7rem] pr-4 text-left">Status</th>
 
-                    <th class="pr-4 text-left">Filed / Done</th>
+                  <th class="w-[8rem] whitespace-nowrap pr-4 text-left">Filed / Done</th>
 
-                    <th class="text-left">Actions</th>
-                  </tr>
-                </thead>
+                  <th class="w-[7rem] text-right">Actions</th>
+                </tr>
+              </thead>
 
-                <tbody>
-                  <tr
-                    :for={row <- @rows}
-                    id={row_id(row)}
-                    class={table_row_class()}
-                  >
-                    <td class="py-2.5 pr-4">
-                      <p class="flex items-center gap-1.5 font-medium">
-                        <span class="truncate">{row.type}</span>
-                        <span
-                          :if={row[:task]}
-                          class="shrink-0 rounded-full border border-base-300 bg-base-200 px-1.5 text-2xs font-medium text-base-content/60"
-                        >
-                          Manual
-                        </span>
-                        <span
-                          :if={row[:task] && row.task.private}
-                          id={"task-private-#{row.task.id}"}
-                          title="Only you can see this"
-                          class="shrink-0 text-base-content/45"
-                        >
-                          <.icon name="hero-lock-closed" class="size-3.5" />
-                          <span class="sr-only">Only you can see this</span>
-                        </span>
-                      </p>
-
-                      <p class="flex flex-wrap items-center gap-x-1.5 text-xs text-base-content/60">
-                        <span>{row.subtitle}</span>
-                        <%= if row[:task] do %>
-                          <span
-                            :if={match?({:custom, _label}, row.category)}
-                            id={"task-category-#{row.task.id}"}
-                            class="inline-flex items-center gap-1 rounded-full bg-base-200 px-1.5 text-2xs font-medium text-base-content/70"
-                          >
-                            <.icon name="hero-tag" class="size-3" />
-                            {Compliance.category_label(row.category)}
-                          </span>
-                          <span
-                            :if={row.task.repeat != "none"}
-                            id={"task-repeat-#{row.task.id}"}
-                            class="inline-flex items-center gap-1"
-                            title={"Repeats #{row.task.repeat}"}
-                          >
-                            <.icon name="hero-arrow-path" class="size-3" /> {repeat_label(
-                              row.task.repeat
-                            )}
-                          </span>
-                          <span
-                            :if={row.task.remind_at}
-                            class="inline-flex items-center gap-1"
-                            title="Reminder time"
-                          >
-                            <.icon name="hero-clock" class="size-3" />
-                            {Calendar.strftime(row.task.remind_at, "%I:%M %p")}
-                          </span>
-                          <span
-                            :if={row.task.email_reminder}
-                            class="inline-flex items-center"
-                            title="Also by email"
-                          >
-                            <.icon name="hero-envelope" class="size-3" />
-                            <span class="sr-only">Also by email</span>
-                          </span>
-                        <% end %>
-                      </p>
-
-                      <p
-                        :if={row[:task] && row.task.notes}
-                        class="mt-0.5 line-clamp-2 max-w-xs text-xs text-base-content/45"
+              <tbody>
+                <tr
+                  :for={row <- @rows}
+                  id={row_id(row)}
+                  class={table_row_class()}
+                >
+                  <td class="py-2.5 pr-4">
+                    <p class="flex items-center gap-1.5 font-medium">
+                      <span class="truncate">{row.type}</span>
+                      <span
+                        :if={row[:task]}
+                        class="shrink-0 rounded-full border border-base-300 bg-base-200 px-1.5 text-2xs font-medium text-base-content/60"
                       >
-                        {row.task.notes}
-                      </p>
-                    </td>
+                        Manual
+                      </span>
+                      <span
+                        :if={row[:task] && row.task.private}
+                        id={"task-private-#{row.task.id}"}
+                        title="Only you can see this"
+                        class="inline-flex shrink-0 items-center gap-1 rounded-full border border-base-300 bg-base-200 px-1.5 text-2xs font-medium text-base-content/60"
+                      >
+                        <.icon name="hero-lock-closed" class="size-3" />
+                        <span>Private</span>
+                      </span>
+                    </p>
 
-                    <td class="py-2.5 pr-4 text-base-content/60">{row.period_label}</td>
-
-                    <td class="py-2.5 pr-4 text-base-content/60">{format_date(row.due_date)}</td>
-
-                    <td class="py-2.5 pr-4"><.status_badge status={row.status} /></td>
-
-                    <td class="py-2.5 pr-4 text-base-content/60">{format_date(row.filed_on)}</td>
-
-                    <td class="py-2.5">
-                      <div :if={row[:task]} class="flex gap-1">
-                        <button
-                          :if={row.status != "Done"}
-                          id={"task-complete-#{row.task.id}"}
-                          type="button"
-                          phx-click="complete_task"
-                          phx-value-id={row.task.id}
-                          class={row_action_class()}
-                          aria-label={"Mark #{row.type} done"}
+                    <p class="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-base-content/60">
+                      <span>{row.subtitle}</span>
+                      <%= if row[:task] do %>
+                        <span
+                          :if={match?({:custom, _label}, row.category)}
+                          id={"task-category-#{row.task.id}"}
+                          class="inline-flex items-center gap-1 rounded-full bg-base-200 px-1.5 text-2xs font-medium text-base-content/70"
                         >
-                          <.icon name="hero-check" class="size-4" />
-                        </button>
-                        <button
-                          :if={row.status == "Done"}
-                          id={"task-reopen-#{row.task.id}"}
-                          type="button"
-                          phx-click="reopen_task"
-                          phx-value-id={row.task.id}
-                          class={row_action_class()}
-                          aria-label={"Reopen #{row.type}"}
+                          <.icon name="hero-tag" class="size-3" />
+                          {Compliance.category_label(row.category)}
+                        </span>
+                        <span
+                          :if={row.task.repeat != "none"}
+                          id={"task-repeat-#{row.task.id}"}
+                          class="inline-flex items-center gap-1"
+                          title={"Repeats #{row.task.repeat}"}
                         >
-                          <.icon name="hero-arrow-uturn-left" class="size-4" />
-                        </button>
-                        <button
-                          id={"task-edit-#{row.task.id}"}
-                          type="button"
-                          phx-click="edit_task"
-                          phx-value-id={row.task.id}
-                          class={row_action_class()}
-                          aria-label={"Edit #{row.type}"}
+                          <.icon name="hero-arrow-path" class="size-3" /> {repeat_label(
+                            row.task.repeat
+                          )}
+                        </span>
+                        <span
+                          :if={row.task.remind_at}
+                          class="inline-flex items-center gap-1"
+                          title="Reminder time"
                         >
-                          <.icon name="hero-pencil-square" class="size-4" />
-                        </button>
-                        <button
-                          id={"task-delete-#{row.task.id}"}
-                          type="button"
-                          phx-click="delete_task"
-                          phx-value-id={row.task.id}
-                          data-confirm={"Delete #{row.type}?"}
-                          class={row_action_class()}
-                          aria-label={"Delete #{row.type}"}
+                          <.icon name="hero-clock" class="size-3" />
+                          {Calendar.strftime(row.task.remind_at, "%I:%M %p")}
+                        </span>
+                        <span
+                          :if={row.task.email_reminder}
+                          class="inline-flex items-center"
+                          title="Also by email"
                         >
-                          <.icon name="hero-trash" class="size-4" />
-                        </button>
-                      </div>
+                          <.icon name="hero-envelope" class="size-3" />
+                          <span class="sr-only">Also by email</span>
+                        </span>
+                      <% end %>
+                    </p>
 
-                      <div :if={!row[:task]} class="flex gap-1">
-                        <button
-                          id={"view-#{row_id(row)}"}
-                          type="button"
-                          phx-click="show_detail"
-                          phx-value-due={row.due_date}
-                          phx-value-type={row.type}
-                          class={row_action_class()}
-                          aria-label={"View #{row.type} details"}
-                        >
-                          <.icon name="hero-eye" class="size-4" />
-                        </button>
+                    <p
+                      :if={row[:task] && row.task.notes}
+                      class="mt-0.5 line-clamp-2 max-w-xs text-xs text-base-content/45"
+                    >
+                      {row.task.notes}
+                    </p>
+                  </td>
 
-                        <%!-- GSTR-1 only: the other returns are summaries derived from it. --%>
-                        <.link
-                          :if={row.type == "GSTR-1"}
-                          href={~p"/reports/gstr1/export?#{[period: row.period_key]}"}
-                          class={row_action_class()}
-                          aria-label={"Download #{row.type} JSON for #{row.period_label}"}
-                        >
-                          <.icon name="hero-arrow-down-tray" class="size-4" />
-                        </.link>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                  <td class="py-2.5 pr-4 text-base-content/60">{row.period_label}</td>
+
+                  <td class="py-2.5 pr-4 text-base-content/60">{format_date(row.due_date)}</td>
+
+                  <td class="py-2.5 pr-4"><.status_badge status={row.status} /></td>
+
+                  <td class="py-2.5 pr-4 text-base-content/60">{format_date(row.filed_on)}</td>
+
+                  <td class="py-2.5 text-right">
+                    <div :if={row[:task]} class="flex justify-end gap-1">
+                      <button
+                        :if={row.status != "Done"}
+                        id={"task-complete-#{row.task.id}"}
+                        type="button"
+                        phx-click="complete_task"
+                        phx-value-id={row.task.id}
+                        class={row_action_class()}
+                        title={"Mark #{row.type} done"}
+                        aria-label={"Mark #{row.type} done"}
+                      >
+                        <.icon name="hero-check" class="size-4" />
+                      </button>
+                      <button
+                        :if={row.status == "Done"}
+                        id={"task-reopen-#{row.task.id}"}
+                        type="button"
+                        phx-click="reopen_task"
+                        phx-value-id={row.task.id}
+                        class={row_action_class()}
+                        title={"Reopen #{row.type}"}
+                        aria-label={"Reopen #{row.type}"}
+                      >
+                        <.icon name="hero-arrow-uturn-left" class="size-4" />
+                      </button>
+                      <button
+                        id={"task-edit-#{row.task.id}"}
+                        type="button"
+                        phx-click="edit_task"
+                        phx-value-id={row.task.id}
+                        class={row_action_class()}
+                        title={"Edit #{row.type}"}
+                        aria-label={"Edit #{row.type}"}
+                      >
+                        <.icon name="hero-pencil-square" class="size-4" />
+                      </button>
+                      <button
+                        id={"task-delete-#{row.task.id}"}
+                        type="button"
+                        phx-click="delete_task"
+                        phx-value-id={row.task.id}
+                        data-confirm={"Delete #{row.type}?"}
+                        class={row_action_class()}
+                        title={"Delete #{row.type}"}
+                        aria-label={"Delete #{row.type}"}
+                      >
+                        <.icon name="hero-trash" class="size-4" />
+                      </button>
+                    </div>
+
+                    <div :if={!row[:task]} class="flex justify-end gap-1">
+                      <button
+                        id={"view-#{row_id(row)}"}
+                        type="button"
+                        phx-click="show_detail"
+                        phx-value-due={row.due_date}
+                        phx-value-type={row.type}
+                        class={row_action_class()}
+                        title={"View #{row.type} details"}
+                        aria-label={"View #{row.type} details"}
+                      >
+                        <.icon name="hero-eye" class="size-4" />
+                      </button>
+
+                      <%!-- GSTR-1 only: the other returns are summaries derived from it. --%>
+                      <.link
+                        :if={row.type == "GSTR-1"}
+                        href={~p"/reports/gstr1/export?#{[period: row.period_key]}"}
+                        class={row_action_class()}
+                        title={"Download #{row.type} JSON for #{row.period_label}"}
+                        aria-label={"Download #{row.type} JSON for #{row.period_label}"}
+                      >
+                        <.icon name="hero-arrow-down-tray" class="size-4" />
+                      </.link>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <p :if={@rows != []} class="mt-4 text-sm text-base-content/60">

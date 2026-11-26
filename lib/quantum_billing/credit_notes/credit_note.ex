@@ -21,6 +21,9 @@ defmodule QuantumBilling.CreditNotes.CreditNote do
     # Minor units of the invoice's currency; parsed by Money.cast_amount/4.
     field :subtotal, :integer, default: 0
     field :tax_total, :integer, default: 0
+    # On a note against a GST reverse-charge invoice: its share of the tax the
+    # recipient pays. Like the invoice, the note charges none (tax_total 0).
+    field :rc_tax_amount, :integer, default: 0
     field :grand_total, :integer, default: 0
     field :status, :string, default: "Issued"
     # Copied from the invoice; never cast from params.

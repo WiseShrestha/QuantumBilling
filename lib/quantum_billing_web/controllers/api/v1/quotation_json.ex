@@ -81,6 +81,11 @@ defmodule QuantumBillingWeb.API.V1.QuotationJSON do
         igst: quotation.igst_amount,
         cess: quotation.cess_amount,
         vat: quotation.vat_amount,
+        # GST reverse charge: the tax the recipient pays, not in grand_total.
+        rc_cgst: quotation.rc_cgst_amount,
+        rc_sgst: quotation.rc_sgst_amount,
+        rc_igst: quotation.rc_igst_amount,
+        rc_cess: quotation.rc_cess_amount,
         round_off: quotation.round_off,
         grand_total: quotation.grand_total
       },

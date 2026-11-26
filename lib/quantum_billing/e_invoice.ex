@@ -48,7 +48,7 @@ defmodule QuantumBilling.EInvoice do
       "TranDetails" => %{
         "TaxSch" => "GST",
         "SupTyp" => if(invoice.client_gstin, do: "B2B", else: "B2C"),
-        "RegRev" => "N"
+        "RegRev" => if(Invoice.gst_reverse_charge?(invoice), do: "Y", else: "N")
       },
       "DocDetails" => %{
         "Typ" => "INV",
@@ -87,11 +87,13 @@ defmodule QuantumBilling.EInvoice do
           }
         end),
       "ValDetails" => %{
+        # On a reverse-charge invoice the tax is reported though not charged:
+        # the charged columns are 0 and the recipient's tax is in rc_*.
         "AssVal" => rupees(invoice.taxable_value),
-        "CgstVal" => rupees(invoice.cgst_amount),
-        "SgstVal" => rupees(invoice.sgst_amount),
-        "IgstVal" => rupees(invoice.igst_amount),
-        "CesVal" => rupees(invoice.cess_amount),
+        "CgstVal" => rupees(Payload.reported_tax(invoice, :cgst)),
+        "SgstVal" => rupees(Payload.reported_tax(invoice, :sgst)),
+        "IgstVal" => rupees(Payload.reported_tax(invoice, :igst)),
+        "CesVal" => rupees(Payload.reported_tax(invoice, :cess)),
         "RndOffAmt" => rupees(invoice.round_off),
         "TotInvVal" => rupees(invoice.grand_total)
       }

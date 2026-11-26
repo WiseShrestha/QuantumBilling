@@ -10,8 +10,10 @@ defmodule QuantumBillingWeb.API.InvoiceParams do
   "Include in API".
 
   The business's regime decides the tax fields: a GST line takes `tax_rate`
-  (a slab); a VAT line takes `tax_rate_id` (else the default rate) and the
-  invoice `reverse_charge`. The other regime's fields are refused.
+  (a slab); a VAT line takes `tax_rate_id` (else the default rate). The other
+  regime's line fields are refused. `reverse_charge` is taken under either:
+  under GST the recipient pays the tax, so none is charged, and the client
+  must have a GSTIN.
 
   Amounts (`rate`, money custom fields) are integer minor units of the
   business currency, the one the document will bill in: 100 to the unit, or
@@ -23,12 +25,12 @@ defmodule QuantumBillingWeb.API.InvoiceParams do
   alias QuantumBillingWeb.API.CustomFieldParams
 
   @top ~w(client_id invoice_type invoice_date due_date payment_terms place_of_supply
-          remarks terms items custom_fields)
+          remarks terms items custom_fields reverse_charge)
   @item ~w(description hsn_sac quantity unit rate custom_fields)
   @max_items 200
 
   # {regime, invoice fields, line fields} beyond the shared ones.
-  @regime_fields %{"gst" => {[], ["tax_rate"]}, "vat" => {["reverse_charge"], ["tax_rate_id"]}}
+  @regime_fields %{"gst" => {[], ["tax_rate"]}, "vat" => {[], ["tax_rate_id"]}}
 
   @doc """
   `{:ok, client_id, attrs}` with `attrs` shaped for `Invoices.create_invoice/1`
@@ -93,7 +95,7 @@ defmodule QuantumBillingWeb.API.InvoiceParams do
     end
   end
 
-  defp refusal(field, "gst") when field in ["reverse_charge", "tax_rate_id"],
+  defp refusal("tax_rate_id", "gst"),
     do: "is for VAT invoices; this business charges GST"
 
   defp refusal("tax_rate", "vat"),

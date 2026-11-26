@@ -162,8 +162,18 @@ the business later switches. Write bodies follow the business's current regime:
 | | GST business | VAT business |
 |---|---|---|
 | Line tax | `tax_rate`: a GST slab (0, 5, 12, 18, 28) | `tax_rate_id`: an active VAT rate's id; left out, the business's default rate |
-| Invoice | `place_of_supply` required | `place_of_supply` optional; `reverse_charge` (boolean) accepted |
-| Refused | `tax_rate_id`, `reverse_charge` — "is for VAT invoices; this business charges GST" | `tax_rate` — "is for GST invoices; a VAT line takes tax_rate_id" |
+| Invoice | `place_of_supply` required; `reverse_charge` (boolean) accepted, and then the client needs a GSTIN | `place_of_supply` optional; `reverse_charge` (boolean) accepted |
+| Refused | `tax_rate_id` — "is for VAT invoices; this business charges GST" | `tax_rate` — "is for GST invoices; a VAT line takes tax_rate_id" |
+
+**Reverse charge under GST** (CGST Act section 9(3), IGST Act section 5(3)):
+the recipient pays the tax to the government, so the invoice charges none.
+`amounts.cgst`, `sgst`, `igst` and `cess` are 0 and `grand_total` is the
+taxable value plus round-off, which is what a payment link asks for. The tax
+the recipient pays is in `amounts.rc_cgst`, `rc_sgst`, `rc_igst` and `rc_cess`;
+the document prints it with the Rule 46(p) note "Tax payable on reverse charge
+basis: Yes", and GSTR-1 and the e-invoice report it with the reverse-charge
+flag. A client without a GSTIN is refused with `client_gstin` "is required for
+a reverse-charge invoice". `rc_*` are 0 on every other invoice.
 
 The rates and their ids are managed by owners in the application; the API
 reads the rate a line used but does not list or change rates. IRP e-invoicing
@@ -218,7 +228,8 @@ The calling key's `name`, `prefix`, `scopes`, `expires_at` and `created_at`.
   "client": {"id": 7, "name": "Northwind Traders", "gstin": "27…", "tax_number": null,
              "state": "Maharashtra (27)"},
   "amounts": {"taxable_value": 10000, "cgst": 900, "sgst": 900, "igst": 0, "cess": 0,
-              "vat": 0, "round_off": 0, "grand_total": 11800},
+              "vat": 0, "rc_cgst": 0, "rc_sgst": 0, "rc_igst": 0, "rc_cess": 0,
+              "round_off": 0, "grand_total": 11800},
   "e_invoice": {"irn": null, "ack_number": null, "ack_date": null, "mode": null},
   "remarks": null, "terms": null, "custom_fields": {"po_number": "PO 1182"},
   "created_at": "…", "updated_at": "…"
@@ -246,7 +257,8 @@ client's VAT number in `client.tax_number`:
     {"name": "Zero-rated", "category": "zero", "rate_bp": 0, "taxable": 10000, "tax": 0}
   ],
   "amounts": {"taxable_value": 34998, "cgst": 0, "sgst": 0, "igst": 0, "cess": 0,
-              "vat": 1250, "round_off": 0, "grand_total": 36248}
+              "vat": 1250, "rc_cgst": 0, "rc_sgst": 0, "rc_igst": 0, "rc_cess": 0,
+              "round_off": 0, "grand_total": 36248}
 }
 ```
 
@@ -423,7 +435,8 @@ over 16 characters.
   "client": {"id": 7, "name": "Northwind Traders", "gstin": "27…", "tax_number": null,
              "state": "Maharashtra (27)"},
   "amounts": {"taxable_value": 10000, "cgst": 900, "sgst": 900, "igst": 0, "cess": 0,
-              "vat": 0, "round_off": 0, "grand_total": 11800},
+              "vat": 0, "rc_cgst": 0, "rc_sgst": 0, "rc_igst": 0, "rc_cess": 0,
+              "round_off": 0, "grand_total": 11800},
   "invoice_id": null, "remarks": null, "terms": null, "custom_fields": {},
   "public_url": "https://…/q/acme/…",
   "created_at": "…", "updated_at": "…"
