@@ -247,7 +247,10 @@ defmodule QuantumBilling.EWayBills.NICClient do
       case Req.post(base_url <> path,
              json: payload,
              headers: [{"x-api-key", api_key}, {"content-type", "application/json"}],
-             receive_timeout: 5000
+             receive_timeout: 5000,
+             # Req's connect timeout defaults to 30 s; the transaction around
+             # this call (EWayBills) must outlast the whole request.
+             connect_options: [timeout: 5000]
            ) do
         {:ok, %{status: 200, body: %{"status" => "1"} = body}} -> {:ok, body}
         {:ok, %{body: %{"error" => error}}} -> {:error, refusal(error)}
@@ -269,6 +272,13 @@ defmodule QuantumBilling.EWayBills.NICClient do
 
   defp refusal(%{"errorCodes" => codes}) when is_binary(codes) and codes != "",
     do: {:portal_refused, error_codes_text(codes)}
+
+  # Some GSPs send the code as a number (240) or a list of them.
+  defp refusal(%{"errorCodes" => code}) when is_integer(code),
+    do: refusal(%{"errorCodes" => Integer.to_string(code)})
+
+  defp refusal(%{"errorCodes" => [_ | _] = codes}),
+    do: refusal(%{"errorCodes" => Enum.map_join(codes, ",", &to_string/1)})
 
   defp refusal(_unreadable), do: :unexpected_response
 

@@ -867,7 +867,8 @@ defmodule QuantumBillingWeb.EWayBillsLive do
   defp action_modal(assigns) do
     ~H"""
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div class="w-full max-w-md space-y-3 rounded-2xl border border-base-300 bg-base-100 p-6 shadow-2xl">
+      <%!-- Capped to the viewport: the extension form is taller than a phone screen. --%>
+      <div class="w-full max-w-md max-h-[90vh] space-y-3 overflow-y-auto rounded-2xl border border-base-300 bg-base-100 p-6 shadow-2xl">
         <div class="flex items-start justify-between border-b border-base-200 pb-3">
           <div>
             <h3 class="text-base font-bold">{@title}</h3>

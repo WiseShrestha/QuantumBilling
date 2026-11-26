@@ -39,6 +39,11 @@ defmodule QuantumBilling.EWayBills do
 
   @statuses ["Active", "Expired", "Cancelled"]
 
+  # The portal is called inside the transaction that records its answer, so a
+  # filed bill is never left unrecorded. Longer than the client's own connect
+  # and receive timeouts (NICClient), so the portal gives up first.
+  @portal_transaction_timeout 30_000
+
   # Rule 138(9): a bill may be cancelled within twenty-four hours of generation.
   @cancellation_window_hours 24
 
@@ -80,24 +85,30 @@ defmodule QuantumBilling.EWayBills do
   end
 
   # Everything that must hold together: the live-bill check, the portal call,
-  # retiring the expired bill and recording the new one.
+  # retiring the expired bill and recording the new one. The check reads the
+  # locked row, not the caller's copy, which may be stale.
   defp issue(%Invoice{} = invoice, params) do
-    Repo.transaction(fn ->
-      lock_invoice!(invoice.id)
+    Repo.transaction(
+      fn ->
+        locked = lock_invoice!(invoice.id)
 
-      with :ok <- ensure_issuable(invoice),
-           {:ok, attrs} <- NICClient.generate_ewb(invoice, params),
-           replaced = retire_expired(invoice.id),
-           {:ok, bill} <- insert_bill(invoice, attrs, params) do
-        {bill, replaced}
-      else
-        {:error, reason} -> Repo.rollback(reason)
-      end
-    end)
+        with :ok <- ensure_issuable(locked),
+             {:ok, attrs} <- NICClient.generate_ewb(invoice, params),
+             replaced = retire_expired(invoice.id),
+             {:ok, bill} <- insert_bill(invoice, attrs, params) do
+          {bill, replaced}
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end,
+      timeout: @portal_transaction_timeout
+    )
   end
 
+  # The invoice row, locked. Issuing, extending and cancelling the invoice all
+  # take this lock, so none of them can interleave.
   defp lock_invoice!(invoice_id) do
-    Repo.one!(from i in Invoice, where: i.id == ^invoice_id, lock: "FOR UPDATE", select: i.id)
+    Repo.one!(from i in Invoice, where: i.id == ^invoice_id, lock: "FOR UPDATE")
   end
 
   # Stores "Expired" on the invoice's lapsed bills, so the new one is the only
@@ -266,29 +277,47 @@ defmodule QuantumBilling.EWayBills do
   :outside_extension_window | changeset | portal_reason}`.
   """
   def extend_validity(%EWayBill{} = bill, params) do
-    changeset = EWayBillExtension.changeset(%EWayBillExtension{}, stringify(params))
+    changeset =
+      %EWayBillExtension{}
+      |> EWayBillExtension.changeset(stringify(params))
+      |> EWayBillExtension.validate_against_bill(bill)
 
-    with :ok <- ensure_extendable(bill),
-         {:ok, extension} <- Ecto.Changeset.apply_action(changeset, :insert),
-         {:ok, valid_until} <- NICClient.extend_validity(bill, Map.from_struct(extension)) do
-      Ecto.Multi.new()
-      |> Ecto.Multi.insert(
-        :extension,
-        EWayBillExtension.record_changeset(changeset, bill, valid_until)
+    # Checked before anything is sent: a detail the portal would refuse is
+    # never filed.
+    with {:ok, extension} <- Ecto.Changeset.apply_action(changeset, :insert) do
+      Repo.transaction(
+        fn ->
+          lock_invoice!(bill.invoice_id)
+
+          # Re-read under the lock: a new bill may have replaced this one, or
+          # it may have been cancelled, since the caller loaded it.
+          current = Repo.get!(EWayBill, bill.id)
+
+          with :ok <- ensure_extendable(current),
+               {:ok, valid_until} <-
+                 NICClient.extend_validity(current, Map.from_struct(extension)),
+               {:ok, _legs} <- record_extension_legs(current, extension),
+               {:ok, _row} <-
+                 Repo.insert(EWayBillExtension.record_changeset(changeset, current, valid_until)),
+               {:ok, updated} <-
+                 Repo.update(
+                   Ecto.Changeset.change(current, extended_bill(extension, valid_until))
+                 ) do
+            {current, updated}
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end,
+        timeout: @portal_transaction_timeout
       )
-      |> Ecto.Multi.update(
-        :bill,
-        Ecto.Changeset.change(bill, extended_bill(extension, valid_until))
-      )
-      |> Repo.transaction()
       |> case do
-        {:ok, %{bill: updated}} ->
+        {:ok, {before, updated}} ->
           updated = preload_bill(updated, force: true)
 
           Audit.log_event(:extend_e_way_bill, "EWayBill", updated.id,
             details: %{
               ewb_number: updated.ewb_number,
-              previous_valid_until: bill.valid_until,
+              previous_valid_until: before.valid_until,
               valid_until: updated.valid_until,
               reason: extension.reason,
               remarks: extension.remarks,
@@ -300,11 +329,41 @@ defmodule QuantumBilling.EWayBills do
           broadcast_change(updated)
           {:ok, updated}
 
-        {:error, _step, failed, _changes} ->
-          {:error, failed}
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
+
+  # Goods that moved to another vehicle or transport document: the journey's
+  # legs keep the one they left (as the first leg, if none is recorded yet)
+  # and gain the new one, as a Part-B update would.
+  defp record_extension_legs(%EWayBill{} = bill, %EWayBillExtension{} = extension) do
+    if moved?(bill, extension) do
+      with {:ok, _first} <- ensure_first_leg(bill) do
+        Repo.insert(
+          PartBUpdate.changeset(%PartBUpdate{}, %{
+            "e_way_bill_id" => bill.id,
+            "vehicle_number" => extension.vehicle_number,
+            "mode_of_transport" => extension.mode_of_transport,
+            "transport_document_number" => extension.transport_document_number,
+            "transport_document_date" => extension.transport_document_date,
+            "place" => extension.from_place,
+            "reason" => "Validity extension: #{extension.reason}"
+          })
+        )
+      end
+    else
+      {:ok, :unchanged}
+    end
+  end
+
+  defp moved?(bill, %EWayBillExtension{consignment_status: "In Movement"} = extension) do
+    {bill.mode_of_transport, bill.vehicle_number, bill.transport_document_number} !=
+      {extension.mode_of_transport, extension.vehicle_number, extension.transport_document_number}
+  end
+
+  defp moved?(_bill, _in_transit), do: false
 
   # Waiting goods keep the bill's last vehicle; moving goods move to the new one.
   defp extended_bill(
@@ -570,7 +629,10 @@ defmodule QuantumBilling.EWayBills do
     )
   end
 
-  # Keeps the original vehicle as the first Part-B leg.
+  # Keeps the original vehicle as the first Part-B leg. It records what the
+  # bill already holds, so it is not held to today's rules: a Rail bill raised
+  # before transport documents were recorded has none, and its first leg must
+  # still be written.
   defp ensure_first_leg(%EWayBill{} = bill) do
     recorded? = Repo.exists?(from p in PartBUpdate, where: p.e_way_bill_id == ^bill.id)
 
@@ -578,7 +640,7 @@ defmodule QuantumBilling.EWayBills do
       {:ok, :already_recorded}
     else
       Repo.insert(
-        PartBUpdate.changeset(%PartBUpdate{}, %{
+        PartBUpdate.history_changeset(%PartBUpdate{}, %{
           "e_way_bill_id" => bill.id,
           "vehicle_number" => bill.vehicle_number,
           "mode_of_transport" => bill.mode_of_transport,

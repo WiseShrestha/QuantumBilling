@@ -498,7 +498,7 @@ defmodule QuantumBillingWeb.EWayBillDoc.Document do
                 <%!-- Every vehicle leg, oldest first, as Rule 138 requires. --%>
                 <tr :for={entry <- @part_b}>
                   <td>{blank(entry.mode_of_transport)}</td>
-                  <td><strong>{blank(entry.vehicle_number)}</strong></td>
+                  <td><strong>{blank(carrier(entry))}</strong></td>
                   <td>{blank(entry.place) |> fallback(from_place(@invoice, @org))}</td>
                   <td>{on_datetime_utc(entry.updated_on)}</td>
                   <td>{blank(@invoice.company_gstin)}</td>
@@ -644,12 +644,26 @@ defmodule QuantumBillingWeb.EWayBillDoc.Document do
           %{
             vehicle_number: bill.vehicle_number,
             mode_of_transport: bill.mode_of_transport,
+            transport_document_number: bill.transport_document_number,
+            transport_document_date: bill.transport_document_date,
             place: nil,
             updated_on: bill.inserted_at
           }
         ]
     end
   end
+
+  # The column is "Vehicle / Trans Doc No.": a Road leg's vehicle, or a Rail,
+  # Air or Ship leg's railway receipt, airway bill or bill of lading.
+  defp carrier(%{mode_of_transport: mode, transport_document_number: number} = entry)
+       when mode in ["Rail", "Air", "Ship"] and is_binary(number) and number != "" do
+    case Map.get(entry, :transport_document_date) do
+      %Date{} = date -> "#{number} (#{Calendar.strftime(date, "%d/%m/%Y")})"
+      _none -> number
+    end
+  end
+
+  defp carrier(entry), do: entry.vehicle_number
 
   # DateTime.compare/2, not term order; the id breaks ties.
   defp leg_before?(a, b) do

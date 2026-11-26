@@ -127,6 +127,26 @@ defmodule QuantumBillingWeb.EWayBillDocumentTest do
   end
 
   # A demo number looks exactly like a filed one; the document must not.
+  # PR #111 review: a Rail, Air or Ship leg has no vehicle; its transport
+  # document is what the "Vehicle / Trans Doc No." column carries.
+  test "a Rail leg prints its railway receipt in the vehicle column", %{conn: conn} do
+    bill = invoice_with_bill()
+
+    {:ok, _moved} =
+      EWayBills.update_part_b(bill, %{
+        "mode_of_transport" => "Rail",
+        "transport_document_number" => "RR998877",
+        "transport_document_date" => "2026-04-19",
+        "place" => "Nagpur Junction"
+      })
+
+    body = conn |> get(~p"/e-way-bills/#{bill.id}/print") |> response(200)
+
+    assert body =~ "RR998877 (19/04/2026)"
+    # The first leg keeps the vehicle the bill was raised with.
+    assert body =~ "MH12AB1234"
+  end
+
   describe "demo and live bills" do
     test "a demo bill is watermarked and says it was not filed", %{conn: conn} do
       bill = invoice_with_bill()

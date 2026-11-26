@@ -254,6 +254,82 @@ defmodule QuantumBilling.EWayBills.ExpiryTest do
     end
   end
 
+  # PR #111 review.
+  describe "review fixes" do
+    test "an extension checks the stored bill, not the caller's copy" do
+      invoice = invoice_fixture()
+      stale = invoice |> bill_fixture() |> valid_until(-60)
+      {:ok, _new} = EWayBills.generate_e_way_bill(invoice, %{"vehicle_number" => "MH12XY9876"})
+
+      # `stale` still says "Active" in memory; the row says "Expired".
+      assert stale.status == "Active"
+      assert {:error, :replaced} = EWayBills.extend_validity(stale, extension_params())
+    end
+
+    test "moving goods to a new vehicle keeps the old one as a leg" do
+      bill = bill_fixture() |> valid_until(60)
+
+      {:ok, extended} =
+        EWayBills.extend_validity(bill, extension_params(%{"vehicle_number" => "MH15EF4321"}))
+
+      assert [first, second] = extended.part_b_updates
+      assert first.vehicle_number == "MH04CD5678"
+      assert second.vehicle_number == "MH15EF4321"
+      assert second.place == "Nashik"
+      assert second.reason =~ "Validity extension"
+    end
+
+    test "the same vehicle adds no leg" do
+      bill = bill_fixture() |> valid_until(60)
+
+      {:ok, extended} =
+        EWayBills.extend_validity(bill, extension_params(%{"vehicle_number" => "MH04CD5678"}))
+
+      assert extended.part_b_updates == []
+    end
+
+    test "the distance left cannot be more than the bill's distance" do
+      bill = bill_fixture() |> valid_until(60)
+
+      assert {:error, changeset} =
+               EWayBills.extend_validity(
+                 bill,
+                 extension_params(%{"remaining_distance_km" => "181"})
+               )
+
+      assert "cannot be more than the bill's distance (180 km)" in errors_on(changeset).remaining_distance_km
+    end
+
+    # Raised before transport documents were recorded: Rail, but no document.
+    test "a legacy Rail bill still records its first leg on a Part-B update" do
+      invoice = invoice_fixture()
+
+      legacy =
+        Repo.insert!(%EWayBill{
+          invoice_id: invoice.id,
+          ewb_number: "191000000123",
+          ewb_date: ~D[2026-03-01],
+          valid_until:
+            NaiveDateTime.add(NaiveDateTime.utc_now(), 86_400) |> NaiveDateTime.truncate(:second),
+          distance_km: 500,
+          mode_of_transport: "Rail",
+          portal_mode: "demo"
+        })
+
+      assert {:ok, updated} =
+               EWayBills.update_part_b(legacy, %{
+                 "mode_of_transport" => "Road",
+                 "vehicle_number" => "MH12AB1234",
+                 "place" => "Pune"
+               })
+
+      assert [first, second] = updated.part_b_updates
+      assert first.mode_of_transport == "Rail"
+      assert first.transport_document_number == nil
+      assert second.vehicle_number == "MH12AB1234"
+    end
+  end
+
   describe "transport modes" do
     test "Road keeps a vehicle number" do
       bill = bill_fixture()

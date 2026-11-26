@@ -865,9 +865,17 @@ defmodule QuantumBilling.Invoices do
         "Paid" -> Repo.rollback(:paid)
         "Credited" -> Repo.rollback(:credited)
         "Cancelled" -> Repo.rollback(:already_cancelled)
-        _open -> cancel_and_queue_link(invoice)
+        _open -> cancel_unless_billed(invoice)
       end
     end)
+  end
+
+  # Checked again under the invoice lock, which issuing an e-way bill takes
+  # too: a bill raised after `cancel_invoice/3`'s first check still blocks it.
+  defp cancel_unless_billed(invoice) do
+    if QuantumBilling.EWayBills.live_bill_for_invoice(invoice.id),
+      do: Repo.rollback(:live_e_way_bill),
+      else: cancel_and_queue_link(invoice)
   end
 
   defp cancel_and_queue_link(invoice) do

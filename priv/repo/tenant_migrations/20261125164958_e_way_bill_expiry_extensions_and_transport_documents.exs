@@ -14,8 +14,12 @@ defmodule QuantumBilling.Repo.TenantMigrations.EWayBillExpiryExtensionsAndTransp
     Part-B leg's `vehicle_number` may be empty, as a bill's already may.
   * `e_way_bill_extensions` keeps one row per validity extension.
 
-  Existing rows are not rewritten: their `valid_until` keeps the value it was
-  given when the bill was raised.
+  Existing bills are moved onto IST. Their validity was counted from the UTC
+  date and stored as 23:59:59 meaning the end of that day in India; read as
+  UTC it ended 5.5 hours late. `valid_until` loses 5h30m so it is the same
+  instant in UTC, and `ewb_date` becomes the Indian date of `inserted_at`
+  (both used the UTC date before). `down` adds the 5h30m back; the Indian
+  dates are kept, being correct either way.
   """
 
   def up do
@@ -30,6 +34,15 @@ defmodule QuantumBilling.Repo.TenantMigrations.EWayBillExpiryExtensionsAndTransp
       add :transport_document_number, :string
       add :transport_document_date, :date
     end
+
+    # Onto IST (see the moduledoc). Runs once, so only bills raised before
+    # this migration are moved.
+    execute("""
+    UPDATE "#{prefix()}"."e_way_bills"
+    SET valid_until = valid_until - interval '5 hours 30 minutes',
+        ewb_date = (inserted_at + interval '5 hours 30 minutes')::date
+    WHERE valid_until IS NOT NULL
+    """)
 
     # A Rail, Air or Ship leg has a transport document instead of a vehicle.
     alter table(:e_way_bill_part_b_updates) do
@@ -63,7 +76,9 @@ defmodule QuantumBilling.Repo.TenantMigrations.EWayBillExpiryExtensionsAndTransp
   end
 
   # Fails while an invoice has an expired bill and its replacement; cancel or
-  # purge one of them first.
+  # purge one of them first. Also fails while a Rail, Air or Ship Part-B leg
+  # has no vehicle number (the old column was NOT NULL): give those legs a
+  # vehicle number, or delete them, before rolling back.
   def down do
     drop table(:e_way_bill_extensions)
 
@@ -81,6 +96,12 @@ defmodule QuantumBilling.Repo.TenantMigrations.EWayBillExpiryExtensionsAndTransp
     drop index(:e_way_bills, [:invoice_id], name: :e_way_bills_one_live_bill_per_invoice_index)
 
     execute(~s(UPDATE "#{prefix()}"."e_way_bills" SET status = 'Active' WHERE status = 'Expired'))
+
+    execute("""
+    UPDATE "#{prefix()}"."e_way_bills"
+    SET valid_until = valid_until + interval '5 hours 30 minutes'
+    WHERE valid_until IS NOT NULL
+    """)
 
     create unique_index(:e_way_bills, [:invoice_id],
              name: :e_way_bills_one_live_bill_per_invoice_index,

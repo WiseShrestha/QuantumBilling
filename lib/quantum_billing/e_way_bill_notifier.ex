@@ -117,7 +117,7 @@ defmodule QuantumBilling.EWayBillNotifier do
           </tr>
           <tr>
             <td style="padding: 4px 0; color: #6b7280;">Vehicle:</td>
-            <td style="padding: 4px 0; color: #111827;">#{escape(bill.vehicle_number || "Not recorded")}</td>
+            <td style="padding: 4px 0; color: #111827;">#{escape(carrier(bill))}</td>
           </tr>
           <tr>
             <td style="padding: 4px 0; color: #6b7280;">Distance:</td>
@@ -144,7 +144,7 @@ defmodule QuantumBilling.EWayBillNotifier do
 
     EWB Number:  #{bill.ewb_number}
     Valid Until: #{valid_until(bill)}
-    Vehicle:     #{bill.vehicle_number || "Not recorded"}
+    Vehicle:     #{carrier(bill)}
     Distance:    #{bill.distance_km} km
 
     It can be cancelled within 24 hours of generation, and the vehicle details
@@ -159,10 +159,23 @@ defmodule QuantumBilling.EWayBillNotifier do
 
   defp document_number(%EWayBill{invoice_id: id}), do: "invoice ##{id}"
 
+  # Road: the vehicle. Rail, Air and Ship: the transport document.
+  defp carrier(%EWayBill{vehicle_number: vehicle}) when is_binary(vehicle), do: vehicle
+
+  defp carrier(%EWayBill{mode_of_transport: mode, transport_document_number: number})
+       when is_binary(number),
+       do: "#{mode} document #{number}"
+
+  defp carrier(_bill), do: "Not recorded"
+
   defp valid_until(%EWayBill{valid_until: nil}), do: "—"
 
+  # Stored in UTC; the email, like the EWB-01 and the export, reads in IST.
   defp valid_until(%EWayBill{valid_until: valid_until}),
-    do: Calendar.strftime(valid_until, "%d/%m/%Y %H:%M")
+    do:
+      valid_until
+      |> QuantumBilling.EWayBills.Validity.to_ist()
+      |> Calendar.strftime("%d/%m/%Y %H:%M IST")
 
   # The consignee name comes from the invoice, so escape it.
   defp escape(nil), do: ""

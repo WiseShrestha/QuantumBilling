@@ -40,6 +40,20 @@ defmodule QuantumBilling.EWayBills.PartBUpdate do
     |> foreign_key_constraint(:e_way_bill_id)
   end
 
+  @doc """
+  The first leg, rebuilt from what the bill already holds. Not held to the
+  transport rules of `changeset/2`: a bill raised before transport documents
+  were recorded may have neither a vehicle nor a document, and its history
+  must still be kept.
+  """
+  def history_changeset(part_b_update, attrs) do
+    part_b_update
+    |> cast(attrs, @castable)
+    |> put_updated_on()
+    |> validate_required([:mode_of_transport, :updated_on, :e_way_bill_id])
+    |> foreign_key_constraint(:e_way_bill_id)
+  end
+
   defp put_updated_on(changeset) do
     case get_field(changeset, :updated_on) do
       nil -> put_change(changeset, :updated_on, DateTime.utc_now() |> DateTime.truncate(:second))

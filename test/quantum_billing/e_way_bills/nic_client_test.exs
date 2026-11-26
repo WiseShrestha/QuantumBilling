@@ -157,6 +157,16 @@ defmodule QuantumBilling.EWayBills.NICClientTest do
       assert bill.ewb_date == ~D[2026-09-25]
     end
 
+    test "a refusal with numeric error codes is passed on, not unreadable" do
+      capture(%{"status" => "0", "error" => %{"errorCodes" => 240}})
+      assert {:error, {:portal_refused, detail}} = NICClient.generate_ewb(invoice_fixture(), %{})
+      assert detail =~ "240"
+
+      capture(%{"status" => "0", "error" => %{"errorCodes" => [604, 240]}})
+      assert {:error, {:portal_refused, detail}} = NICClient.generate_ewb(invoice_fixture(), %{})
+      assert detail =~ "error 604"
+    end
+
     test "reads the portal's times in 12- and 24-hour forms" do
       assert NICClient.portal_time("05/01/2018 12:15:00 AM") == ~N[2018-01-04 18:45:00]
       assert NICClient.portal_time("05/01/2018 12:15:00 PM") == ~N[2018-01-05 06:45:00]

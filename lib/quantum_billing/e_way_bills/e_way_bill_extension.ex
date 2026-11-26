@@ -72,6 +72,20 @@ defmodule QuantumBilling.EWayBills.EWayBillExtension do
     |> validate_where_goods_are()
   end
 
+  @doc """
+  Checks the extension against the bill: the distance left cannot be more
+  than the bill's own distance, which the portal refuses too.
+  """
+  def validate_against_bill(changeset, %EWayBill{distance_km: distance})
+      when is_integer(distance) and distance > 0 do
+    validate_number(changeset, :remaining_distance_km,
+      less_than_or_equal_to: distance,
+      message: "cannot be more than the bill's distance (#{distance} km)"
+    )
+  end
+
+  def validate_against_bill(changeset, _bill), do: changeset
+
   @doc "Sets what the context works out: the validity before and after, and when."
   def record_changeset(changeset, %EWayBill{} = bill, %NaiveDateTime{} = valid_until) do
     changeset
