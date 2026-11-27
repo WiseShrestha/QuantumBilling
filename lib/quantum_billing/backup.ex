@@ -22,6 +22,7 @@ defmodule QuantumBilling.Backup do
   alias QuantumBilling.EWayBills.EWayBill
   alias QuantumBilling.EWayBills.EWayBillExtension
   alias QuantumBilling.EWayBills.PartBUpdate
+  alias QuantumBilling.EWayBills.Validity
   alias QuantumBilling.Invoices.Invoice
   alias QuantumBilling.Invoices.InvoiceItem
   alias QuantumBilling.Money.Paise
@@ -426,10 +427,29 @@ defmodule QuantumBilling.Backup do
   defp upgrade(%{"version" => "3.2"} = data), do: data |> Map.put("version", "3.3") |> upgrade()
 
   # 3.3 had no e-way bill extensions or transport documents: the section is
-  # absent and the columns read as nil.
-  defp upgrade(%{"version" => "3.3"} = data), do: Map.put(data, "version", @version)
+  # absent and the columns read as nil. Bill expiry was stored as local IST.
+  defp upgrade(%{"version" => "3.3"} = data) do
+    data
+    |> Map.update("e_way_bills", [], fn
+      rows when is_list(rows) -> Enum.map(rows, &upgrade_bill_validity/1)
+      other -> other
+    end)
+    |> Map.put("version", @version)
+  end
 
   defp upgrade(data), do: data
+
+  defp upgrade_bill_validity(%{"valid_until" => value} = row) do
+    case Ecto.Type.cast(:naive_datetime, value) do
+      {:ok, %NaiveDateTime{} = expiry} ->
+        Map.put(row, "valid_until", Validity.from_ist(expiry))
+
+      _nil_or_invalid ->
+        row
+    end
+  end
+
+  defp upgrade_bill_validity(row), do: row
 
   defp rupees_to_paise(row, fields) when is_map(row) do
     Enum.reduce(fields, row, fn field, acc ->

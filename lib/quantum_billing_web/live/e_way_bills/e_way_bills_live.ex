@@ -103,6 +103,9 @@ defmodule QuantumBillingWeb.EWayBillsLive do
       nil ->
         {:noreply, put_flash(socket, :error, "That e-way bill no longer exists.")}
 
+      %{invoice: %{status: "Cancelled"}} when action == "extend" ->
+        {:noreply, refuse_cancelled_extension(socket)}
+
       bill ->
         {:noreply,
          socket
@@ -159,6 +162,9 @@ defmodule QuantumBillingWeb.EWayBillsLive do
          |> assign(action: nil, action_bill: nil)
          |> load_page()}
 
+      {:error, :cancelled} ->
+        {:noreply, refuse_cancelled_extension(socket)}
+
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, extend_error(reason))}
     end
@@ -206,6 +212,13 @@ defmodule QuantumBillingWeb.EWayBillsLive do
 
   defp delete_confirmation(%{ewb_no: number}) do
     "Move e-way bill #{number} to the Bin? It can be restored from there."
+  end
+
+  defp refuse_cancelled_extension(socket) do
+    socket
+    |> assign(action: nil, action_bill: nil)
+    |> put_flash(:error, "An e-way bill for a cancelled invoice cannot be extended.")
+    |> load_page()
   end
 
   defp extend_error(:gone), do: "That e-way bill no longer exists."

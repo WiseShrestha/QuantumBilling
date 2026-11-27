@@ -201,17 +201,22 @@ defmodule QuantumBilling.BackupTest do
       assert [%{reason: "Transshipment", previous_valid_until: ^soon}] = restored.extensions
     end
 
-    test "a 3.3 file without e-way bill extensions still restores" do
-      invoice_fixture(client_fixture())
+    test "a 3.3 file restores e-way bill expiry from IST to UTC" do
+      invoice = invoice_fixture(client_fixture())
+      {:ok, bill} = EWayBills.generate_e_way_bill(invoice, %{})
 
       json =
         Backup.export_json()
         |> Jason.decode!()
         |> Map.delete("e_way_bill_extensions")
         |> Map.put("version", "3.3")
+        |> update_in(["e_way_bills", Access.all(), "valid_until"], fn _utc ->
+          "2026-11-25T23:59:59"
+        end)
         |> Jason.encode!()
 
-      assert {:ok, %{e_way_bill_extensions: 0, invoices: 1}} = Backup.restore_json(json)
+      assert {:ok, %{e_way_bill_extensions: 0, e_way_bills: 1}} = Backup.restore_json(json)
+      assert EWayBills.get_e_way_bill(bill.id).valid_until == ~N[2026-11-25 18:29:59]
     end
 
     test "a 3.2 file without quotations still restores" do
@@ -684,7 +689,7 @@ defmodule QuantumBilling.BackupTest do
       assert bill.transporter_name == "Blue Dart"
       assert bill.status == "Active"
       assert bill.invoice_id == invoice.id
-      assert bill.valid_until == ~N[2026-03-03 00:00:00]
+      assert bill.valid_until == ~N[2026-03-02 18:30:00]
       # Nothing in a 2.0 file says how the bill was issued.
       assert bill.portal_mode == "demo"
     end

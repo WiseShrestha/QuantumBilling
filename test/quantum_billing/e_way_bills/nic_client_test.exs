@@ -10,6 +10,8 @@ defmodule QuantumBilling.EWayBills.NICClientTest do
   alias QuantumBilling.EWayBills
   alias QuantumBilling.EWayBills.EWayBill
   alias QuantumBilling.EWayBills.NICClient
+  alias QuantumBilling.EWayBills.Validity
+  alias QuantumBilling.Invoices
   alias QuantumBilling.Invoices.Invoice
 
   defp invoice_fixture do
@@ -141,6 +143,20 @@ defmodule QuantumBilling.EWayBills.NICClientTest do
       end)
     end
 
+    defp transit_extension do
+      %{
+        "reason" => "Accident",
+        "remarks" => "Truck overturned",
+        "from_place" => "Nashik",
+        "from_state" => "Maharashtra (27)",
+        "from_pincode" => "422001",
+        "remaining_distance_km" => "120",
+        "consignment_status" => "In Transit",
+        "transit_type" => "Warehouse",
+        "address" => "Godown 4, MIDC Ambad"
+      }
+    end
+
     test "stores the validity and date the portal returns, in UTC" do
       capture(%{
         "status" => "1",
@@ -230,25 +246,15 @@ defmodule QuantumBilling.EWayBills.NICClientTest do
 
       soon = NaiveDateTime.utc_now() |> NaiveDateTime.add(3600) |> NaiveDateTime.truncate(:second)
       bill = bill |> Ecto.Changeset.change(valid_until: soon) |> Repo.update!()
+      new_expiry = NaiveDateTime.add(soon, 24, :hour)
 
       capture(%{
         "status" => "1",
         "ewayBillNo" => 331_000_000_005,
-        "validUpto" => "28/11/2026 11:59:00 PM"
+        "validUpto" => Calendar.strftime(Validity.to_ist(new_expiry), "%d/%m/%Y %I:%M:%S %p")
       })
 
-      assert {:ok, extended} =
-               EWayBills.extend_validity(bill, %{
-                 "reason" => "Accident",
-                 "remarks" => "Truck overturned",
-                 "from_place" => "Nashik",
-                 "from_state" => "Maharashtra (27)",
-                 "from_pincode" => "422001",
-                 "remaining_distance_km" => "120",
-                 "consignment_status" => "In Transit",
-                 "transit_type" => "Warehouse",
-                 "address" => "Godown 4, MIDC Ambad"
-               })
+      assert {:ok, extended} = EWayBills.extend_validity(bill, transit_extension())
 
       assert_received {:portal, "/ewaybillapi/v1.03/ewayapi/extendvalidity", payload}
 
@@ -264,7 +270,32 @@ defmodule QuantumBilling.EWayBills.NICClientTest do
       assert payload["transMode"] == "5"
       assert payload["addressLine1"] == "Godown 4, MIDC Ambad"
 
-      assert extended.valid_until == ~N[2026-11-28 18:29:00]
+      assert extended.valid_until == new_expiry
+    end
+
+    test "rejects extending a bill on a cancelled invoice before calling NIC" do
+      capture(%{
+        "status" => "1",
+        "ewayBillNo" => 331_000_000_007,
+        "validUpto" => "26/11/2026 11:59:00 PM"
+      })
+
+      invoice = invoice_fixture()
+      {:ok, bill} = EWayBills.generate_e_way_bill(invoice, %{})
+      assert_received {:portal, _, _}
+
+      expired =
+        NaiveDateTime.utc_now() |> NaiveDateTime.add(-1, :hour) |> NaiveDateTime.truncate(:second)
+
+      bill = bill |> Ecto.Changeset.change(valid_until: expired) |> Repo.update!()
+
+      assert {:ok, %{status: "Cancelled"}} = Invoices.cancel_invoice(invoice, "Order cancelled")
+      assert {:error, :cancelled} = EWayBills.extend_validity(bill, transit_extension())
+      refute_received {:portal, _, _}
+
+      unchanged = EWayBills.get_e_way_bill(bill.id)
+      assert unchanged.valid_until == expired
+      assert unchanged.extensions == []
     end
 
     test "a Part-B update to Ship sends the bill of lading" do

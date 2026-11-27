@@ -8,6 +8,7 @@ defmodule QuantumBillingWeb.EWayBillsLiveTest do
   import Phoenix.LiveViewTest
 
   alias QuantumBilling.EWayBills
+  alias QuantumBilling.Invoices
   alias QuantumBilling.Invoices.Invoice
   alias QuantumBilling.Repo
 
@@ -392,6 +393,29 @@ defmodule QuantumBillingWeb.EWayBillsLiveTest do
 
       assert html =~ "Rule 138(10) allows an extension only"
       assert EWayBills.get_e_way_bill(bill.id).extensions == []
+    end
+
+    test "closes the extension form if the invoice is cancelled while it is open", %{conn: conn} do
+      bill = bill(%{}) |> valid_for(-3600)
+      {:ok, view, _html} = live(conn, ~p"/e-way-bills")
+
+      action = %{"action" => "extend", "id" => to_string(bill.id)}
+      render_click(view, "open_action", action)
+      assert has_element?(view, "#ewb-extend-form")
+
+      invoice = Invoices.get_invoice!(bill.invoice_id)
+      assert {:ok, _cancelled} = Invoices.cancel_invoice(invoice, "Order cancelled")
+
+      assert view |> form("#ewb-extend-form", extension_form()) |> render_submit() =~
+               "An e-way bill for a cancelled invoice cannot be extended."
+
+      refute has_element?(
+               view,
+               ~s(button[aria-label="Extend validity of e-way bill #{bill.ewb_number}"])
+             )
+
+      render_click(view, "open_action", action)
+      refute has_element?(view, "#ewb-extend-form")
     end
 
     test "shows the first missing detail", %{conn: conn} do

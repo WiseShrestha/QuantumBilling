@@ -273,7 +273,7 @@ defmodule QuantumBilling.EWayBills do
   document when the goods are moving), and an audit entry is written. A
   demo bill is extended locally.
 
-  Returns `{:ok, bill}` or `{:error, :already_cancelled | :replaced |
+  Returns `{:ok, bill}` or `{:error, :cancelled | :already_cancelled | :replaced |
   :outside_extension_window | changeset | portal_reason}`.
   """
   def extend_validity(%EWayBill{} = bill, params) do
@@ -287,13 +287,13 @@ defmodule QuantumBilling.EWayBills do
     with {:ok, extension} <- Ecto.Changeset.apply_action(changeset, :insert) do
       Repo.transaction(
         fn ->
-          lock_invoice!(bill.invoice_id)
+          invoice = lock_invoice!(bill.invoice_id)
 
           # Re-read under the lock: a new bill may have replaced this one, or
           # it may have been cancelled, since the caller loaded it.
           current = Repo.get!(EWayBill, bill.id)
 
-          with :ok <- ensure_extendable(current),
+          with :ok <- ensure_extendable(current, invoice),
                {:ok, valid_until} <-
                  NICClient.extend_validity(current, Map.from_struct(extension)),
                {:ok, _legs} <- record_extension_legs(current, extension),
@@ -382,7 +382,7 @@ defmodule QuantumBilling.EWayBills do
   defp extended_bill(_in_transit, valid_until), do: %{valid_until: valid_until}
 
   @doc "Whether the bill can be extended now (Rule 138(10))."
-  def extendable?(%EWayBill{} = bill), do: ensure_extendable(bill) == :ok
+  def extendable?(%EWayBill{} = bill), do: ensure_extendable(bill, bill.invoice) == :ok
 
   @doc "One non-binned bill with its invoice and history, or `nil` (also for bad ids)."
   def get_e_way_bill(id), do: fetch_by_id(EWayBill.kept(), id)
@@ -596,10 +596,14 @@ defmodule QuantumBilling.EWayBills do
 
   # Not `ensure_updatable/1`: an extension is asked for around expiry, so a
   # bill that reads as expired may still be extended.
-  defp ensure_extendable(%EWayBill{status: "Cancelled"}), do: {:error, :already_cancelled}
-  defp ensure_extendable(%EWayBill{status: "Expired"}), do: {:error, :replaced}
+  defp ensure_extendable(_bill, %Invoice{status: "Cancelled"}), do: {:error, :cancelled}
 
-  defp ensure_extendable(%EWayBill{valid_until: valid_until}) do
+  defp ensure_extendable(%EWayBill{status: "Cancelled"}, _invoice),
+    do: {:error, :already_cancelled}
+
+  defp ensure_extendable(%EWayBill{status: "Expired"}, _invoice), do: {:error, :replaced}
+
+  defp ensure_extendable(%EWayBill{valid_until: valid_until}, _invoice) do
     if Validity.extendable?(valid_until, NaiveDateTime.utc_now()),
       do: :ok,
       else: {:error, :outside_extension_window}
