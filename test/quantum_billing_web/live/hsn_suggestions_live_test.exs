@@ -209,6 +209,40 @@ defmodule QuantumBillingWeb.HsnSuggestionsLiveTest do
       assert has_element?(view, option(0, "9401") <> "[data-confirm]")
     end
 
+    test "keeps overwrite confirmation on a manual row when other rows are added or removed",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/invoices/new")
+      manual = line("Office chair", %{"tax_rate" => "5"})
+      items = %{"0" => line("Consulting"), "1" => manual}
+
+      type(view, items, 1, "tax_rate")
+
+      add =
+        items
+        |> params()
+        |> put_in(["invoice", "items_sort"], ["0", "1", "new"])
+        |> Map.put("_target", ["invoice", "items_sort"])
+
+      render_change(view, "validate", add)
+      items = Map.put(items, "2", line(""))
+      type(view, items, 1, "description")
+      assert has_element?(view, option(1, "9401") <> "[data-confirm]")
+
+      remove =
+        items
+        |> params()
+        |> put_in(["invoice", "items_sort"], ["0", "1", "2"])
+        |> put_in(["invoice", "items_drop"], ["0"])
+        |> Map.put("_target", ["invoice", "items_drop"])
+
+      render_change(view, "validate", remove)
+      type(view, %{"0" => manual, "1" => line("Office chair")}, 0, "description")
+      assert has_element?(view, option(0, "9401") <> "[data-confirm]")
+
+      type(view, %{"0" => manual, "1" => line("Office chair")}, 1, "description")
+      refute has_element?(view, option(1, "9401") <> "[data-confirm]")
+    end
+
     test "an untouched row is filled without asking", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/invoices/new")
 

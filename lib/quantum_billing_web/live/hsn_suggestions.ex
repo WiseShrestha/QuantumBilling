@@ -17,7 +17,8 @@ defmodule QuantumBillingWeb.HsnSuggestions do
       never replaced without the user saying so.
     * `notice`: the "please verify" note after a pick, for a few seconds.
 
-  Row state is keyed by the row's index, so adding or removing a row clears it.
+  Adding or removing a row closes the panel and carries the manual and
+  suggested flags to each surviving row's new index.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -95,11 +96,26 @@ defmodule QuantumBillingWeb.HsnSuggestions do
     %{hsn | query: query}
   end
 
-  # A row added, removed or reordered: indexes no longer mean the same rows.
-  defp changed(_hsn, form, _params, [form, key | _rest]) when key in ["items_sort", "items_drop"],
-    do: blank()
+  defp changed(hsn, form, params, [form, key | _rest]) when key in ["items_sort", "items_drop"] do
+    # The form sends every existing index in items_sort. Ecto drops the
+    # removed indexes and assigns a position to each remaining or new row.
+    order = List.wrap(params["items_sort"]) -- List.wrap(params["items_drop"])
+    indexes = Enum.with_index(order)
+
+    %{
+      blank()
+      | manual: reindex(hsn.manual, indexes),
+        suggested: reindex(hsn.suggested, indexes)
+    }
+  end
 
   defp changed(hsn, _form, _params, _target), do: hsn
+
+  defp reindex(flags, indexes) do
+    for {old, new} <- indexes, MapSet.member?(flags, old), into: MapSet.new() do
+      Integer.to_string(new)
+    end
+  end
 
   @doc "The \"Find HSN/SAC\" search for a row, by keyword or by code."
   def lookup_results(%{query: query}) do
