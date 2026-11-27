@@ -607,7 +607,7 @@ defmodule QuantumBilling.Compliance do
 
   def document_number_valid?(_number), do: false
 
-  @doc "Today's date in the current business's time zone."
+  @doc "Today's date in the current business's time zone. Falls back to UTC without a business."
   def local_date do
     clock = Application.get_env(:quantum_billing, :compliance_clock, &DateTime.utc_now/0)
     local_date(clock.())
@@ -629,10 +629,7 @@ defmodule QuantumBilling.Compliance do
   end
 
   defp organization_timezone do
-    case QuantumBilling.Settings.get_organization() do
-      %{timezone: timezone} when is_binary(timezone) -> timezone
-      _none -> nil
-    end
+    if Repo.business(), do: QuantumBilling.Settings.get_organization().timezone
   end
 
   defp remind_tasks(today, time) do
