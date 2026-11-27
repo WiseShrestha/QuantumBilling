@@ -51,7 +51,7 @@ defmodule QuantumBillingWeb.Router do
     plug QuantumBillingWeb.Plugs.CalendarFeedRateLimit
   end
 
-  # Public legal pages and quotations.
+  # Public legal pages.
   scope "/", QuantumBillingWeb do
     pipe_through :browser
 
@@ -59,10 +59,19 @@ defmodule QuantumBillingWeb.Router do
       on_mount: [{QuantumBillingWeb.UserAuth, :mount_current_scope}] do
       live "/terms", TermsLive, :index
       live "/privacy", PrivacyLive, :index
-      live "/q/:slug/:token", PublicQuotationLive, :show
+    end
+  end
+
+  # Public quotation links: crawlers must not index customer documents.
+  scope "/q", QuantumBillingWeb do
+    pipe_through [:browser, :public_invoice_noindex]
+
+    live_session :public_quotation,
+      on_mount: [{QuantumBillingWeb.UserAuth, :mount_current_scope}] do
+      live "/:slug/:token", PublicQuotationLive, :show
     end
 
-    get "/q/:slug/:token/pdf", QuotationPdfController, :public
+    get "/:slug/:token/pdf", QuotationPdfController, :public
   end
 
   # Public invoice links: crawlers must not index these customer documents.
